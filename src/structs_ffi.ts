@@ -273,9 +273,8 @@ export function defineStruct<const Fields extends readonly StructField[], const 
   const lengthOfFields: Record<string, StructLayoutField> = {}
   const lengthOfRequested: {
     requester: StructLayoutField
-    def: EnumDef<any> | PrimitiveType
+    def: EnumDef<any> | PrimitiveType | "char*"
   }[] = []
-  const charStarFieldsRequested: StructLayoutField[] = []
   const arrayFieldsMetadata: Record<string, ArrayFieldMetadata> = {}
 
   for (const [name, typeOrStruct, options = {}] of fields) {
@@ -556,14 +555,10 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       lengthOfFields[options.lengthOf] = layoutField
     }
     if (needsLengthOf) {
-      // For char* fields, we track them separately
-      if (typeof typeOrStruct === "string" && typeOrStruct === "char*") {
-        charStarFieldsRequested.push(layoutField)
-      } else {
-        // For arrays
-        if (!lengthOfDef) fatalError(`Internal error: needsLengthOf=true but lengthOfDef is null for ${name}`)
-        lengthOfRequested.push({ requester: layoutField, def: lengthOfDef })
-      }
+      // For char*, pass "char*" as the def; for arrays, pass the actual def
+      const def = typeof typeOrStruct === "string" && typeOrStruct === "char*" ? "char*" : lengthOfDef
+      if (!def) fatalError(`Internal error: needsLengthOf=true but def is null for ${name}`)
+      lengthOfRequested.push({ requester: layoutField, def })
     }
 
     offset += size
@@ -573,11 +568,28 @@ export function defineStruct<const Fields extends readonly StructField[], const 
   // Resolve lengthOf fields
   for (const { requester, def } of lengthOfRequested) {
     const lengthOfField = lengthOfFields[requester.name]
+
     if (!lengthOfField) {
+      if (def === "char*") {
+        continue
+      }
       throw new Error(`lengthOf field not found for array field ${requester.name}`)
     }
 
-    if (isPrimitiveType(def)) {
+    if (def === "char*") {
+      requester.unpack = (view, off) => {
+        const ptrAddress = pointerUnpacker(view, off)
+        const length = lengthOfField.unpack(view, lengthOfField.offset)
+
+        if (ptrAddress === 0 || length === 0) {
+          return null
+        }
+
+        const byteLength = typeof length === "bigint" ? Number(length) : length
+        const buffer = toArrayBuffer(ptrAddress, 0, byteLength)
+        return decoder.decode(buffer)
+      }
+    } else if (isPrimitiveType(def)) {
       const elemSize = typeSizes[def]
       const { unpack: primitiveUnpack } = primitivePackers(def)
 
@@ -625,32 +637,6 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         return result
       }
     }
-  }
-
-  // Resolve char* fields with lengthOf
-  for (const charStarField of charStarFieldsRequested) {
-    const lengthOfField = lengthOfFields[charStarField.name]
-
-    if (lengthOfField) {
-      // Has a length field - set up automatic string unpacking
-      charStarField.unpack = (view, off) => {
-        const ptrAddress = pointerUnpacker(view, off)
-        const length = lengthOfField.unpack(view, lengthOfField.offset)
-
-        // Handle null pointer or zero length
-        if (ptrAddress === 0 || length === 0) {
-          return null
-        }
-
-        // Convert length to number (handles both bigint and number)
-        const byteLength = typeof length === "bigint" ? Number(length) : length
-
-        // Read the buffer and decode to string
-        const buffer = toArrayBuffer(ptrAddress, 0, byteLength)
-        return decoder.decode(buffer)
-      }
-    }
-    // If no lengthOf field, leave the default unpack that returns the pointer
   }
 
   const totalSize = alignOffset(offset, maxAlign)
