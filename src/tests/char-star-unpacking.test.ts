@@ -1,5 +1,6 @@
 import { expect, describe, it } from "bun:test"
 import { defineStruct } from "../structs_ffi"
+import { ptr } from "bun:ffi"
 
 describe("char* automatic unpacking", () => {
   it("should automatically unpack char* to string when lengthOf field exists", () => {
@@ -194,5 +195,84 @@ describe("char* automatic unpacking", () => {
     const unpacked = StringStruct.unpack(packed)
 
     expect(unpacked.data).toBe(testString)
+  })
+
+  it("should handle char* with non-zero pointer but zero length", () => {
+    const StringStruct = defineStruct([
+      ["data", "char*"],
+      ["length", "u32", { lengthOf: "data" }],
+    ] as const)
+
+    const manualBuffer = new ArrayBuffer(StringStruct.size)
+    const view = new DataView(manualBuffer)
+
+    const fakePointer = 0x12345678
+    if (process.arch === "x64" || process.arch === "arm64") {
+      view.setBigUint64(0, BigInt(fakePointer), true)
+    } else {
+      view.setUint32(0, fakePointer, true)
+    }
+
+    view.setUint32(8, 0, true)
+
+    const unpacked = StringStruct.unpack(manualBuffer)
+    expect(unpacked.data).toBeNull()
+    expect(unpacked.length).toBe(0)
+  })
+
+  it("should handle char* with valid pointer to real memory but zero length (u32)", () => {
+    const StringStruct = defineStruct([
+      ["data", "char*"],
+      ["length", "u32", { lengthOf: "data" }],
+    ] as const)
+
+    const realData = new TextEncoder().encode("some actual data here")
+    const realDataBuffer = new ArrayBuffer(realData.length)
+    new Uint8Array(realDataBuffer).set(realData)
+
+    const realPointer = ptr(realDataBuffer)
+
+    const structBuffer = new ArrayBuffer(StringStruct.size)
+    const view = new DataView(structBuffer)
+
+    if (process.arch === "x64" || process.arch === "arm64") {
+      view.setBigUint64(0, BigInt(realPointer), true)
+    } else {
+      view.setUint32(0, Number(realPointer), true)
+    }
+
+    view.setUint32(8, 0, true)
+
+    const unpacked = StringStruct.unpack(structBuffer)
+    expect(unpacked.data).toBeNull()
+    expect(unpacked.length).toBe(0)
+  })
+
+  it("should handle char* with valid pointer to real memory but zero length (u64)", () => {
+    const StringStruct = defineStruct([
+      ["data", "char*"],
+      ["length", "u64", { lengthOf: "data" }],
+    ] as const)
+
+    const realData = new TextEncoder().encode("some actual data here")
+    const realDataBuffer = new ArrayBuffer(realData.length)
+    new Uint8Array(realDataBuffer).set(realData)
+
+    const realPointer = ptr(realDataBuffer)
+
+    const structBuffer = new ArrayBuffer(StringStruct.size)
+    const view = new DataView(structBuffer)
+
+    if (process.arch === "x64" || process.arch === "arm64") {
+      view.setBigUint64(0, BigInt(realPointer), true)
+    } else {
+      view.setUint32(0, Number(realPointer), true)
+    }
+
+    view.setBigUint64(8, 0n, true)
+
+    const unpacked = StringStruct.unpack(structBuffer)
+    expect(unpacked.data).toBeNull()
+    expect(unpacked.length).toBe(0n)
   })
 })
