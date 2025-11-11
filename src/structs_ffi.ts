@@ -260,6 +260,7 @@ export function packObjectArray(val: (PointyObject | null)[]) {
 }
 
 const encoder = new TextEncoder()
+const decoder = new TextDecoder()
 
 // Define Struct
 export function defineStruct<const Fields extends readonly StructField[], const Opts extends StructDefOptions = {}>(
@@ -274,6 +275,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     requester: StructLayoutField
     def: EnumDef<any> | PrimitiveType
   }[] = []
+  const charStarFieldsRequested: StructLayoutField[] = []
   const arrayFieldsMetadata: Record<string, ArrayFieldMetadata> = {}
 
   for (const [name, typeOrStruct, options = {}] of fields) {
@@ -314,11 +316,12 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         const bufPtr = val ? ptr(encoder.encode(val)) : null // No null terminator
         pointerPacker(view, off, bufPtr)
       }
+      // Initial unpack returns pointer; will be replaced if lengthOf field exists
       unpack = (view: DataView, off: number) => {
-        // TODO: Unpack char* requires length info, typically from another field
         const ptrVal = pointerUnpacker(view, off)
-        return ptrVal // Returning pointer for now
+        return ptrVal
       }
+      needsLengthOf = true // Mark for later resolution
       // Enum
     } else if (isEnum(typeOrStruct)) {
       const base = typeOrStruct.type
@@ -553,8 +556,14 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       lengthOfFields[options.lengthOf] = layoutField
     }
     if (needsLengthOf) {
-      if (!lengthOfDef) fatalError(`Internal error: needsLengthOf=true but lengthOfDef is null for ${name}`)
-      lengthOfRequested.push({ requester: layoutField, def: lengthOfDef })
+      // For char* fields, we track them separately
+      if (typeof typeOrStruct === "string" && typeOrStruct === "char*") {
+        charStarFieldsRequested.push(layoutField)
+      } else {
+        // For arrays
+        if (!lengthOfDef) fatalError(`Internal error: needsLengthOf=true but lengthOfDef is null for ${name}`)
+        lengthOfRequested.push({ requester: layoutField, def: lengthOfDef })
+      }
     }
 
     offset += size
@@ -616,6 +625,32 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         return result
       }
     }
+  }
+
+  // Resolve char* fields with lengthOf
+  for (const charStarField of charStarFieldsRequested) {
+    const lengthOfField = lengthOfFields[charStarField.name]
+
+    if (lengthOfField) {
+      // Has a length field - set up automatic string unpacking
+      charStarField.unpack = (view, off) => {
+        const ptrAddress = pointerUnpacker(view, off)
+        const length = lengthOfField.unpack(view, lengthOfField.offset)
+
+        // Handle null pointer or zero length
+        if (ptrAddress === 0 || length === 0) {
+          return null
+        }
+
+        // Convert length to number (handles both bigint and number)
+        const byteLength = typeof length === "bigint" ? Number(length) : length
+
+        // Read the buffer and decode to string
+        const buffer = toArrayBuffer(ptrAddress, 0, byteLength)
+        return decoder.decode(buffer)
+      }
+    }
+    // If no lengthOf field, leave the default unpack that returns the pointer
   }
 
   const totalSize = alignOffset(offset, maxAlign)
