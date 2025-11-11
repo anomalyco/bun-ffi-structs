@@ -13,6 +13,7 @@ describe("string packing with graphemes and emojis", () => {
     const packed = StringStruct.pack({ data: testString })
     const unpacked = StringStruct.unpack(packed)
 
+    expect(unpacked.data).toBe(testString)
     expect(unpacked.length).toBe(BigInt(Buffer.byteLength(testString)))
     expect(unpacked.length).toBe(13n)
   })
@@ -27,6 +28,7 @@ describe("string packing with graphemes and emojis", () => {
     const packed = StringStruct.pack({ data: testString })
     const unpacked = StringStruct.unpack(packed)
 
+    expect(unpacked.data).toBe(testString)
     expect(unpacked.length).toBe(BigInt(Buffer.byteLength(testString)))
     expect(unpacked.length).toBe(5n)
     expect(testString.length).toBe(4)
@@ -42,6 +44,7 @@ describe("string packing with graphemes and emojis", () => {
     const packed = StringStruct.pack({ data: testString })
     const unpacked = StringStruct.unpack(packed)
 
+    expect(unpacked.data).toBe(testString)
     expect(unpacked.length).toBe(BigInt(Buffer.byteLength(testString)))
     expect(unpacked.length).toBe(10n)
     expect(testString.length).toBe(8)
@@ -57,6 +60,7 @@ describe("string packing with graphemes and emojis", () => {
     const packed = StringStruct.pack({ data: testString })
     const unpacked = StringStruct.unpack(packed)
 
+    expect(unpacked.data).toBe(testString)
     expect(unpacked.length).toBe(BigInt(Buffer.byteLength(testString)))
     expect(unpacked.length).toBe(15n)
     expect(testString.length).toBe(7)
@@ -72,6 +76,7 @@ describe("string packing with graphemes and emojis", () => {
     const packed = StringStruct.pack({ data: testString })
     const unpacked = StringStruct.unpack(packed)
 
+    expect(unpacked.data).toBe(testString)
     expect(unpacked.length).toBe(BigInt(Buffer.byteLength(testString)))
     expect(unpacked.length).toBe(25n)
   })
@@ -89,6 +94,8 @@ describe("string packing with graphemes and emojis", () => {
     const unpacked1 = StringStruct.unpack(packed1)
     const unpacked2 = StringStruct.unpack(packed2)
 
+    expect(unpacked1.data).toBe(testString)
+    expect(unpacked2.data).toBe(testString2)
     expect(unpacked1.length).toBe(BigInt(Buffer.byteLength(testString)))
     expect(unpacked2.length).toBe(BigInt(Buffer.byteLength(testString2)))
     expect(unpacked1.length).toBe(2n)
@@ -171,6 +178,9 @@ describe("string packing with graphemes and emojis", () => {
     })
     const unpacked = MultiStringStruct.unpack(packed)
 
+    expect(unpacked.field1).toBe("ASCII text")
+    expect(unpacked.field2).toBe("Emoji 🎉")
+    expect(unpacked.field3).toBe("Combined é")
     expect(unpacked.length1).toBe(BigInt(Buffer.byteLength("ASCII text")))
     expect(unpacked.length2).toBe(BigInt(Buffer.byteLength("Emoji 🎉")))
     expect(unpacked.length3).toBe(BigInt(Buffer.byteLength("Combined é")))
@@ -185,6 +195,7 @@ describe("string packing with graphemes and emojis", () => {
     const packed = StringStruct.pack({ data: "" })
     const unpacked = StringStruct.unpack(packed)
 
+    expect(unpacked.data).toBeNull()
     expect(unpacked.length).toBe(0n)
   })
 
@@ -197,6 +208,7 @@ describe("string packing with graphemes and emojis", () => {
     const packed = StringStruct.pack({ data: null })
     const unpacked = StringStruct.unpack(packed)
 
+    expect(unpacked.data).toBeNull()
     expect(unpacked.length).toBe(0n)
   })
 
@@ -221,6 +233,7 @@ describe("string packing with graphemes and emojis", () => {
     })
     const unpacked = ChatStruct.unpack(packed)
 
+    expect(unpacked.message.content).toBe("Hello! 👋 How are you? 😊")
     expect(unpacked.message.contentLength).toBe(BigInt(Buffer.byteLength("Hello! 👋 How are you? 😊")))
     expect(unpacked.timestamp).toBe(1234567890n)
   })
@@ -239,6 +252,8 @@ describe("string packing with graphemes and emojis", () => {
     })
     const unpacked = MultiStringStruct.unpack(packed)
 
+    expect(unpacked.str1).toBe("🌍")
+    expect(unpacked.str2).toBe("🎉")
     expect(unpacked.len1).toBe(4n)
     expect(unpacked.len2).toBe(4n)
   })
@@ -263,6 +278,7 @@ describe("string packing with graphemes and emojis", () => {
       const packed = StringStruct.pack({ data: str })
       const unpacked = StringStruct.unpack(packed)
 
+      expect(unpacked.data).toBe(str)
       expect(unpacked.length).toBe(BigInt(expectedBytes))
       expect(Number(unpacked.length)).toBe(Buffer.byteLength(str))
     }
