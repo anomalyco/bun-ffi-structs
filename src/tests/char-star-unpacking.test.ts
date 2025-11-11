@@ -216,7 +216,7 @@ describe("char* automatic unpacking", () => {
     view.setUint32(8, 0, true)
 
     const unpacked = StringStruct.unpack(manualBuffer)
-    expect(unpacked.data).toBeNull()
+    expect(unpacked.data).toBe("")
     expect(unpacked.length).toBe(0)
   })
 
@@ -244,7 +244,7 @@ describe("char* automatic unpacking", () => {
     view.setUint32(8, 0, true)
 
     const unpacked = StringStruct.unpack(structBuffer)
-    expect(unpacked.data).toBeNull()
+    expect(unpacked.data).toBe("")
     expect(unpacked.length).toBe(0)
   })
 
@@ -272,7 +272,7 @@ describe("char* automatic unpacking", () => {
     view.setBigUint64(8, 0n, true)
 
     const unpacked = StringStruct.unpack(structBuffer)
-    expect(unpacked.data).toBeNull()
+    expect(unpacked.data).toBe("")
     expect(unpacked.length).toBe(0n)
   })
 })

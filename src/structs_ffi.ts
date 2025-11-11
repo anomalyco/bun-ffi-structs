@@ -581,10 +581,14 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         const ptrAddress = pointerUnpacker(view, off)
         const length = lengthOfField.unpack(view, lengthOfField.offset)
 
+        if (ptrAddress === 0) {
+          return null
+        }
+
         const byteLength = typeof length === "bigint" ? Number(length) : length
 
-        if (ptrAddress === 0 || byteLength === 0) {
-          return null
+        if (byteLength === 0) {
+          return ""
         }
 
         const buffer = toArrayBuffer(ptrAddress, 0, byteLength)
