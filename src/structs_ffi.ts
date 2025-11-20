@@ -577,9 +577,11 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     }
 
     if (def === "char*") {
+      const relativeOffset = lengthOfField.offset - requester.offset
+
       requester.unpack = (view, off) => {
         const ptrAddress = pointerUnpacker(view, off)
-        const length = lengthOfField.unpack(view, lengthOfField.offset)
+        const length = lengthOfField.unpack(view, off + relativeOffset)
 
         if (ptrAddress === 0) {
           return null
@@ -597,10 +599,11 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     } else if (isPrimitiveType(def)) {
       const elemSize = typeSizes[def]
       const { unpack: primitiveUnpack } = primitivePackers(def)
+      const relativeOffset = lengthOfField.offset - requester.offset
 
       requester.unpack = (view, off) => {
         const result = []
-        const length = lengthOfField.unpack(view, lengthOfField.offset)
+        const length = lengthOfField.unpack(view, off + relativeOffset)
         const ptrAddress = pointerUnpacker(view, off)
 
         if (ptrAddress === 0n && length > 0) {
@@ -620,10 +623,11 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       }
     } else {
       const elemSize = def.type === "u32" ? 4 : 8
+      const relativeOffset = lengthOfField.offset - requester.offset
 
       requester.unpack = (view, off) => {
         const result = []
-        const length = lengthOfField.unpack(view, lengthOfField.offset)
+        const length = lengthOfField.unpack(view, off + relativeOffset)
         const ptrAddress = pointerUnpacker(view, off)
 
         if (ptrAddress === 0n && length > 0) {
