@@ -78,10 +78,10 @@ unpacked.forEach((item, i) => {
   if (!original) throw new Error(`Missing original item at index ${i}`)
 
   console.log(`  Item ${i}:`)
-  console.log(`    Original: start=${original.start}, text=${original.concealText}`)
+  console.log(`    Original: start=${original!.start}, text=${original!.concealText}`)
   console.log(`    Unpacked: start=${item!.start}, text=${item!.concealText}`)
 
-  if (item!.start !== original.start || item!.concealText !== original.concealText) {
+  if (item!.start !== original!.start || item!.concealText !== original!.concealText) {
     console.error(`    ❌ Mismatch at index ${i}!`)
     process.exit(1)
   }
