@@ -1,4 +1,4 @@
-import { defineStruct } from "../src/structs_ffi"
+import { defineStruct } from "../src/structs_ffi.js"
 
 console.log("=== Example 6: Pack and Unpack Transforms ===\n")
 

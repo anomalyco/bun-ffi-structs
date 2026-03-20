@@ -1,5 +1,5 @@
 import { Bench } from "tinybench"
-import { defineStruct, defineEnum } from "../src/structs_ffi"
+import { defineStruct, defineEnum } from "../src/structs_ffi.js"
 
 const SimpleStruct = defineStruct([
   ["id", "u32"],

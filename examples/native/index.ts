@@ -1,4 +1,4 @@
-import { PersonStruct, getAge, getHeight, getWeight, getName, calculateBMI } from "./lib"
+import { PersonStruct, getAge, getHeight, getWeight, getName, calculateBMI } from "./lib.js"
 
 console.log("=== Native FFI with Struct Packing ===\n")
 

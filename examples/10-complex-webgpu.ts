@@ -1,4 +1,4 @@
-import { defineEnum, defineStruct } from "../src/structs_ffi"
+import { defineEnum, defineStruct } from "../src/structs_ffi.js"
 
 console.log("=== Example 10: Complex WebGPU-like Structure ===\n")
 

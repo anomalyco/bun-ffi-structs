@@ -1,6 +1,6 @@
 import { expect, describe, it } from "bun:test"
 import { toArrayBuffer } from "bun:ffi"
-import { defineEnum, defineStruct } from "../structs_ffi"
+import { defineEnum, defineStruct } from "../structs_ffi.js"
 
 describe("complex struct with length field and nested arrays", () => {
   it("should handle bind group layout-like structure", () => {
