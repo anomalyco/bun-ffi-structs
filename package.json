@@ -27,8 +27,8 @@
     "bench": "bun run bench/structs.bench.ts",
     "prettier:check": "bun prettier --check .",
     "prettier:write": "bun prettier --write .",
-    "build": "./scripts/build.sh",
-    "publint": "publint"
+    "publint": "publint",
+    "build": "./scripts/build.sh"
   },
   "devDependencies": {
     "@types/bun": "latest",
