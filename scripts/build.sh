@@ -17,8 +17,9 @@ cd dist
 cat package.json | \
   sed 's|"module": "src/index.ts"|"module": "index.js"|' | \
   sed 's|"main": "src/index.ts"|"main": "index.js"|' | \
-  sed '/"main":/a\
-  "types": "index.d.ts",' > package.json.tmp
+  sed 's|"types": "src/index.ts"|"types": "index.d.ts"|' | \
+  sed 's|"./dist/index.d.ts"|"./index.d.ts"|' | \
+  sed 's|"./dist/index.js"|"./index.js"|' > package.json.tmp
 mv package.json.tmp package.json
 
 echo "Build completed successfully!"
