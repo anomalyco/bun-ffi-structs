@@ -1,6 +1,6 @@
 import { expect, describe, it } from "bun:test"
 import { toArrayBuffer } from "bun:ffi"
-import { defineStruct } from "../structs_ffi"
+import { defineStruct } from "../structs_ffi.js"
 
 describe("struct options", () => {
   it("should apply mapValue transformation", () => {

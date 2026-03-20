@@ -1,5 +1,5 @@
 import { expect, describe, it } from "bun:test"
-import { defineEnum, defineStruct } from "../structs_ffi"
+import { defineEnum, defineStruct } from "../structs_ffi.js"
 
 describe("packList", () => {
   it("should pack a list of simple structs into a single buffer", () => {

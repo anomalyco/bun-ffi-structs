@@ -1,6 +1,6 @@
 import { expect, describe, it } from "bun:test"
 import { toArrayBuffer } from "bun:ffi"
-import { defineEnum, defineStruct } from "../structs_ffi"
+import { defineEnum, defineStruct } from "../structs_ffi.js"
 
 describe("field validation", () => {
   it("should validate primitive fields and throw on invalid values", () => {

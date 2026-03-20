@@ -1,4 +1,4 @@
-import { defineStruct } from "../src/structs_ffi"
+import { defineStruct } from "../src/structs_ffi.js"
 
 console.log("=== Example 1: Basic Primitive Types ===\n")
 

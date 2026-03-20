@@ -1,5 +1,5 @@
 import { dlopen, CString, ptr } from "bun:ffi"
-import { defineStruct } from "../../src/structs_ffi"
+import { defineStruct } from "../../src/structs_ffi.js"
 
 const PersonStruct = defineStruct([
   ["age", "u32"],

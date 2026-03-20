@@ -1,4 +1,4 @@
-import { defineStruct, objectPtr } from "../src/structs_ffi"
+import { defineStruct, objectPtr } from "../src/structs_ffi.js"
 
 console.log("=== Example 12: Arrays of Object Pointers ===\n")
 

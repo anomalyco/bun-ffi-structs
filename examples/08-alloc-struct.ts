@@ -1,4 +1,4 @@
-import { defineStruct, allocStruct } from "../src/structs_ffi"
+import { defineStruct, allocStruct } from "../src/structs_ffi.js"
 
 console.log("=== Example 8: Pre-allocating Structs with Arrays ===\n")
 

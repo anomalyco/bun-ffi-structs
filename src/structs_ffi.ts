@@ -15,7 +15,7 @@ import type {
   StructDefOptions,
   DefineStructReturnType,
   PrimitiveToTSType,
-} from "./types"
+} from "./types.js"
 
 function fatalError(...args: any[]): never {
   const message = args.join(" ")
