@@ -15,11 +15,8 @@ cp LICENSE dist/ 2>/dev/null || echo "No LICENSE file found"
 echo "Updating dist/package.json..."
 cd dist
 cat package.json | \
-  sed 's|"module": "src/index.ts"|"module": "index.js"|' | \
-  sed 's|"main": "src/index.ts"|"main": "index.js"|' | \
-  sed 's|"types": "src/index.ts"|"types": "index.d.ts"|' | \
-  sed 's|"./dist/index.d.ts"|"./index.d.ts"|' | \
-  sed 's|"./dist/index.js"|"./index.js"|' > package.json.tmp
+  sed 's|"./dist/|"./|g' | \
+  sed 's|"./src/index.ts"|"./index.ts"|g' > package.json.tmp
 mv package.json.tmp package.json
 
 echo "Build completed successfully!"
