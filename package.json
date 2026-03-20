@@ -20,18 +20,20 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/sst/bun-ffi-structs.git"
+    "url": "git+https://github.com/sst/bun-ffi-structs.git"
   },
   "scripts": {
     "test": "bun test",
     "bench": "bun run bench/structs.bench.ts",
     "prettier:check": "bun prettier --check .",
     "prettier:write": "bun prettier --write .",
-    "build": "./scripts/build.sh"
+    "build": "./scripts/build.sh",
+    "publint": "publint"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "prettier": "3.6.2",
+    "publint": "^0.3.18",
     "tinybench": "^5.0.1"
   },
   "peerDependencies": {
