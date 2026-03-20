@@ -1,6 +1,6 @@
 import { expect, describe, it } from "bun:test"
 import { toArrayBuffer } from "bun:ffi"
-import { defineStruct } from "../structs_ffi"
+import { defineStruct } from "../structs_ffi.js"
 
 describe("string packing with graphemes and emojis", () => {
   it("should pack and unpack char* with byte length (not character count) for ASCII", () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test"
-import { defineEnum, defineStruct } from "../structs_ffi"
+import { defineEnum, defineStruct } from "../structs_ffi.js"
 
 describe("Example 2: Enums (exact reproduction)", () => {
   it("should work exactly like the example", () => {

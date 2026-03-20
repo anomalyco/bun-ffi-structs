@@ -1,5 +1,5 @@
 import { expect, describe, it } from "bun:test"
-import { defineEnum, defineStruct, objectPtr, allocStruct } from "../structs_ffi"
+import { defineEnum, defineStruct, objectPtr, allocStruct } from "../structs_ffi.js"
 
 describe("struct utilities", () => {
   it("should allocate struct buffer", () => {

@@ -1,5 +1,5 @@
 import { expect, describe, it } from "bun:test"
-import { defineStruct } from "../structs_ffi"
+import { defineStruct } from "../structs_ffi.js"
 import { ptr } from "bun:ffi"
 
 describe("char* automatic unpacking", () => {

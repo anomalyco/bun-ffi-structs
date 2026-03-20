@@ -1,5 +1,5 @@
 import { expect, describe, it } from "bun:test"
-import { defineEnum, defineStruct } from "../structs_ffi"
+import { defineEnum, defineStruct } from "../structs_ffi.js"
 
 describe("conditional fields", () => {
   it("should include field when condition returns true", () => {
