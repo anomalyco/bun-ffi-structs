@@ -3,7 +3,7 @@ import { dlopen, ptr, toArrayBuffer } from "bun:ffi"
 import { execSync } from "child_process"
 import { existsSync } from "fs"
 import { join } from "path"
-import { defineStruct } from "../structs_ffi"
+import { defineStruct } from "../structs_ffi.js"
 
 const testDir = __dirname
 const libPath = join(testDir, "libtest.dylib")
