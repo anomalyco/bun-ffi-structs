@@ -37,6 +37,7 @@ const typeSizes: Record<PrimitiveType, number> = {
   f64: 8,
   pointer: pointerSize,
   i32: 4,
+  i64: 8,
 } as const
 const primitiveKeys = Object.keys(typeSizes)
 
@@ -57,6 +58,7 @@ const typeGetters: Record<PrimitiveType, (view: DataView, offset: number) => any
   f32: (view: DataView, offset: number) => view.getFloat32(offset, true),
   f64: (view: DataView, offset: number) => view.getFloat64(offset, true),
   i32: (view: DataView, offset: number) => view.getInt32(offset, true),
+  i64: (view: DataView, offset: number) => view.getBigInt64(offset, true),
   pointer: (view: DataView, offset: number) =>
     pointerSize === 8 ? view.getBigUint64(offset, true) : BigInt(view.getUint32(offset, true)),
 }
@@ -214,6 +216,10 @@ function primitivePackers(type: PrimitiveType) {
     case "i32":
       pack = (view: DataView, off: number, val: number) => view.setInt32(off, val, true)
       unpack = (view: DataView, off: number) => view.getInt32(off, true)
+      break
+    case "i64":
+      pack = (view: DataView, off: number, val: bigint) => view.setBigInt64(off, BigInt(val), true)
+      unpack = (view: DataView, off: number) => view.getBigInt64(off, true)
       break
     case "u64":
       pack = (view: DataView, off: number, val: bigint) => view.setBigUint64(off, BigInt(val), true)
