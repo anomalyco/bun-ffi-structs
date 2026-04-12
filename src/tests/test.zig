@@ -153,3 +153,29 @@ export fn validateHighlightList(ptr: *anyopaque, count: usize) bool {
 
     return true;
 }
+
+// i64 signed integer tests
+pub const TimestampStruct = extern struct {
+    created_at: i64,
+    modified_at: i64,
+    deleted_at: i64,
+};
+
+var test_timestamp: TimestampStruct = undefined;
+
+export fn createTestTimestamp() *anyopaque {
+    test_timestamp = TimestampStruct{
+        .created_at = -1640000000000,
+        .modified_at = 1640000000000,
+        .deleted_at = 0,
+    };
+    return @as(*anyopaque, @ptrCast(&test_timestamp));
+}
+
+export fn validateTimestamp(ptr: *anyopaque, expected_created: i64, expected_modified: i64, expected_deleted: i64) bool {
+    const ts = @as(*const TimestampStruct, @ptrCast(@alignCast(ptr)));
+    if (ts.created_at != expected_created) return false;
+    if (ts.modified_at != expected_modified) return false;
+    if (ts.deleted_at != expected_deleted) return false;
+    return true;
+}

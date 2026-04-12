@@ -50,6 +50,14 @@ beforeAll(() => {
       args: ["ptr", "usize"],
       returns: "bool",
     },
+    createTestTimestamp: {
+      args: [],
+      returns: "ptr",
+    },
+    validateTimestamp: {
+      args: ["ptr", "i64", "i64", "i64"],
+      returns: "bool",
+    },
   })
 })
 
@@ -544,6 +552,88 @@ describe("Native Zig interop with char* and lengthOf", () => {
         expect(unpacked[i]!.hlRef).toBe(original[i]!.hlRef)
         expect(unpacked[i]!.concealText).toBe(original[i]!.concealText)
       }
+    })
+  })
+})
+
+describe("Native Zig interop with i64 signed integers", () => {
+  const TimestampStruct = defineStruct([
+    ["created_at", "i64"],
+    ["modified_at", "i64"],
+    ["deleted_at", "i64"],
+  ])
+
+  describe("TypeScript → Zig (pack then validate by Zig)", () => {
+    it("should pack i64 fields correctly for Zig", () => {
+      const testData = {
+        created_at: -1640000000000n,
+        modified_at: 1640000000000n,
+        deleted_at: 0n,
+      }
+
+      const buffer = TimestampStruct.pack(testData)
+      expect(buffer.byteLength).toBe(TimestampStruct.size)
+
+      const isValid = native.symbols.validateTimestamp(ptr(buffer), -1640000000000n, 1640000000000n, 0n)
+      expect(isValid).toBe(true)
+    })
+
+    it("should pack negative i64 values", () => {
+      const testData = {
+        created_at: -9223372036854775808n, // i64 min
+        modified_at: -1n,
+        deleted_at: -100n,
+      }
+
+      const buffer = TimestampStruct.pack(testData)
+      const isValid = native.symbols.validateTimestamp(ptr(buffer), -9223372036854775808n, -1n, -100n)
+      expect(isValid).toBe(true)
+    })
+
+    it("should pack positive i64 values including max", () => {
+      const testData = {
+        created_at: 9223372036854775807n, // i64 max
+        modified_at: 1n,
+        deleted_at: 100n,
+      }
+
+      const buffer = TimestampStruct.pack(testData)
+      const isValid = native.symbols.validateTimestamp(ptr(buffer), 9223372036854775807n, 1n, 100n)
+      expect(isValid).toBe(true)
+    })
+  })
+
+  describe("Zig → TypeScript (unpack Zig-created structs)", () => {
+    it("should unpack i64 fields from Zig struct", () => {
+      const zigTsPtr = native.symbols.createTestTimestamp()
+      expect(zigTsPtr).not.toBe(0n)
+
+      const zigBuffer = toArrayBuffer(zigTsPtr as any, 0, TimestampStruct.size)
+      const unpacked = TimestampStruct.unpack(zigBuffer)
+
+      expect(unpacked.created_at).toBe(-1640000000000n)
+      expect(unpacked.modified_at).toBe(1640000000000n)
+      expect(unpacked.deleted_at).toBe(0n)
+    })
+  })
+
+  describe("Round-trip: TypeScript → Zig → TypeScript", () => {
+    it("should preserve negative i64 values through pack → Zig validation → unpack", () => {
+      const originalData = {
+        created_at: -5000000000000n,
+        modified_at: -1n,
+        deleted_at: 0n,
+      }
+
+      const packed = TimestampStruct.pack(originalData)
+
+      const isValid = native.symbols.validateTimestamp(ptr(packed), -5000000000000n, -1n, 0n)
+      expect(isValid).toBe(true)
+
+      const unpacked = TimestampStruct.unpack(packed)
+      expect(unpacked.created_at).toBe(-5000000000000n)
+      expect(unpacked.modified_at).toBe(-1n)
+      expect(unpacked.deleted_at).toBe(0n)
     })
   })
 })
