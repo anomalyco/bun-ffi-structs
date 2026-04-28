@@ -1,5 +1,6 @@
-import { ptr, toArrayBuffer } from "bun:ffi"
+import { ptr, toArrayBuffer } from "./ffi.js"
 import type {
+  Pointer,
   PrimitiveType,
   PointyObject,
   ObjectPointerDef,
@@ -24,6 +25,7 @@ function fatalError(...args: any[]): never {
 }
 
 export const pointerSize = process.arch === "x64" || process.arch === "arm64" ? 8 : 4
+const isBun = typeof process !== "undefined" && "bun" in process.versions
 
 const typeSizes: Record<PrimitiveType, number> = {
   u8: 1,
@@ -95,6 +97,7 @@ export function allocStruct(structDef: StructDef<any, any>, options?: AllocStruc
 
       const pointer = length > 0 ? ptr(subBuffer) : null
       pointerPacker(view, arrayMeta.arrayOffset, pointer)
+      retainPointerTarget(buffer, subBuffer)
       arrayMeta.lengthPack(view, arrayMeta.lengthOffset, length)
     }
 
@@ -228,14 +231,18 @@ function primitivePackers(type: PrimitiveType) {
       unpack = (view: DataView, off: number) => view.getFloat64(off, true)
       break
     case "pointer":
-      pack = (view: DataView, off: number, val: bigint | number) => {
+      pack = (view: DataView, off: number, val: Pointer) => {
         pointerSize === 8
           ? view.setBigUint64(off, val ? BigInt(val) : 0n, true)
           : view.setUint32(off, val ? Number(val) : 0, true)
       }
-      unpack = (view: DataView, off: number): number => {
-        const bint = pointerSize === 8 ? view.getBigUint64(off, true) : BigInt(view.getUint32(off, true))
-        return Number(bint)
+      unpack = (view: DataView, off: number): Pointer => {
+        if (pointerSize === 8) {
+          const value = view.getBigUint64(off, true)
+          return isBun ? Number(value) : value
+        }
+
+        return view.getUint32(off, true)
       }
       break
     default:
@@ -247,6 +254,31 @@ function primitivePackers(type: PrimitiveType) {
 }
 
 const { pack: pointerPacker, unpack: pointerUnpacker } = primitivePackers("pointer")
+
+const retainedPointerTargets = new WeakMap<ArrayBufferLike, unknown[]>()
+
+function retainPointerTarget(owner: ArrayBufferLike, target: unknown) {
+  const retained = retainedPointerTargets.get(owner)
+  if (retained) {
+    retained.push(target)
+  } else {
+    retainedPointerTargets.set(owner, [target])
+  }
+}
+
+function retainIfPointerTargets(owner: ArrayBufferLike, target: ArrayBufferLike) {
+  if (retainedPointerTargets.has(target)) {
+    retainPointerTarget(owner, target)
+  }
+}
+
+function isNullPointer(pointer: Pointer | null | undefined): boolean {
+  return pointer == null || pointer === 0 || pointer === 0n
+}
+
+function toItemCount(length: number | bigint): number {
+  return typeof length === "bigint" ? Number(length) : length
+}
 
 export function packObjectArray(val: (PointyObject | null)[]) {
   const buffer = new ArrayBuffer(val.length * pointerSize)
@@ -299,8 +331,15 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       size = pointerSize
       align = pointerSize
       pack = (view: DataView, off: number, val: string | null) => {
-        const bufPtr = val ? ptr(encoder.encode(val + "\0")) : null
+        if (!val) {
+          pointerPacker(view, off, null)
+          return
+        }
+
+        const bytes = encoder.encode(val + "\0")
+        const bufPtr = ptr(bytes)
         pointerPacker(view, off, bufPtr)
+        retainPointerTarget(view.buffer, bytes)
       }
       unpack = (view: DataView, off: number) => {
         // TODO: Unpack CString from pointer
@@ -312,8 +351,15 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       size = pointerSize
       align = pointerSize
       pack = (view: DataView, off: number, val: string | null) => {
-        const bufPtr = val ? ptr(encoder.encode(val)) : null // No null terminator
+        if (!val) {
+          pointerPacker(view, off, null)
+          return
+        }
+
+        const bytes = encoder.encode(val) // No null terminator
+        const bufPtr = ptr(bytes)
         pointerPacker(view, off, bufPtr)
+        retainPointerTarget(view.buffer, bytes)
       }
       // Initial unpack returns pointer; will be replaced if lengthOf field exists
       unpack = (view: DataView, off: number) => {
@@ -347,6 +393,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
           }
           const nestedBuf = typeOrStruct.pack(val, options)
           pointerPacker(view, off, ptr(nestedBuf))
+          retainPointerTarget(view.buffer, nestedBuf)
         }
         unpack = (view, off) => {
           throw new Error("Not implemented yet")
@@ -360,6 +407,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
           const nestedView = new Uint8Array(nestedBuf)
           const dView = new Uint8Array(view.buffer)
           dView.set(nestedView, off)
+          retainIfPointerTargets(view.buffer, nestedBuf)
         }
         unpack = (view, off) => {
           const slice = view.buffer.slice(off, off + size)
@@ -412,6 +460,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
             bufferView.setUint32(i * arrayElementSize, num, true)
           }
           pointerPacker(view, off, ptr(buffer))
+          retainPointerTarget(view.buffer, buffer)
         }
         unpack = null!
         needsLengthOf = true
@@ -430,6 +479,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
             def.packInto(val[i], bufferView, i * arrayElementSize, options)
           }
           pointerPacker(view, off, ptr(buffer))
+          retainPointerTarget(view.buffer, buffer)
         }
         unpack = (view, off) => {
           throw new Error("Not implemented yet")
@@ -450,6 +500,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
             primitivePack(bufferView, i * arrayElementSize, val[i])
           }
           pointerPacker(view, off, ptr(buffer))
+          retainPointerTarget(view.buffer, buffer)
         }
         unpack = null!
         needsLengthOf = true
@@ -464,6 +515,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
 
           const packedView = packObjectArray(val)
           pointerPacker(view, off, ptr(packedView.buffer))
+          retainPointerTarget(view.buffer, packedView.buffer)
         }
         unpack = () => {
           // TODO: implement unpack for class pointers
@@ -583,11 +635,11 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         const ptrAddress = pointerUnpacker(view, off)
         const length = lengthOfField.unpack(view, off + relativeOffset)
 
-        if (ptrAddress === 0) {
+        if (isNullPointer(ptrAddress)) {
           return null
         }
 
-        const byteLength = typeof length === "bigint" ? Number(length) : length
+        const byteLength = toItemCount(length)
 
         if (byteLength === 0) {
           return ""
@@ -604,19 +656,20 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       requester.unpack = (view, off) => {
         const result = []
         const length = lengthOfField.unpack(view, off + relativeOffset)
+        const itemCount = toItemCount(length)
         const ptrAddress = pointerUnpacker(view, off)
 
-        if (ptrAddress === 0n && length > 0) {
+        if (isNullPointer(ptrAddress) && itemCount > 0) {
           throw new Error(`Array field ${requester.name} has null pointer but length ${length}.`)
         }
-        if (ptrAddress === 0n || length === 0) {
+        if (isNullPointer(ptrAddress) || itemCount === 0) {
           return []
         }
 
-        const buffer = toArrayBuffer(ptrAddress, 0, length * elemSize)
+        const buffer = toArrayBuffer(ptrAddress, 0, itemCount * elemSize)
         const bufferView = new DataView(buffer)
 
-        for (let i = 0; i < length; i++) {
+        for (let i = 0; i < itemCount; i++) {
           result.push(primitiveUnpack(bufferView, i * elemSize))
         }
         return result
@@ -628,19 +681,20 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       requester.unpack = (view, off) => {
         const result = []
         const length = lengthOfField.unpack(view, off + relativeOffset)
+        const itemCount = toItemCount(length)
         const ptrAddress = pointerUnpacker(view, off)
 
-        if (ptrAddress === 0n && length > 0) {
+        if (isNullPointer(ptrAddress) && itemCount > 0) {
           throw new Error(`Array field ${requester.name} has null pointer but length ${length}.`)
         }
-        if (ptrAddress === 0n || length === 0) {
+        if (isNullPointer(ptrAddress) || itemCount === 0) {
           return []
         }
 
-        const buffer = toArrayBuffer(ptrAddress, 0, length * elemSize)
+        const buffer = toArrayBuffer(ptrAddress, 0, itemCount * elemSize)
         const bufferView = new DataView(buffer)
 
-        for (let i = 0; i < length; i++) {
+        for (let i = 0; i < itemCount; i++) {
           result.push(def.from(bufferView.getUint32(i * elemSize, true)))
         }
         return result
