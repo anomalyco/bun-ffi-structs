@@ -1,6 +1,6 @@
 import { expect, describe, it } from "bun:test"
+import { toArrayBuffer } from "../ffi.js"
 import { defineEnum, defineStruct, objectPtr, allocStruct, packObjectArray } from "../structs_ffi.js"
-import { toArrayBuffer } from "bun:ffi"
 
 describe("Structs FFI", () => {
   describe("defineEnum", () => {

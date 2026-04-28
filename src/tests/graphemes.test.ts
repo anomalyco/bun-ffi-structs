@@ -1,6 +1,7 @@
 import { expect, describe, it } from "bun:test"
-import { toArrayBuffer } from "bun:ffi"
+import { toArrayBuffer } from "../ffi.js"
 import { defineStruct } from "../structs_ffi.js"
+import type { Pointer } from "../types.js"
 
 describe("string packing with graphemes and emojis", () => {
   it("should pack and unpack char* with byte length (not character count) for ASCII", () => {
@@ -113,11 +114,10 @@ describe("string packing with graphemes and emojis", () => {
           data: v,
           length: Buffer.byteLength(v),
         }),
-        reduceValue: (v: { data: number; length: bigint }) => {
-          if (v.data === 0 || v.length === 0n) {
+        reduceValue: (v: { data: Pointer; length: bigint }) => {
+          if (v.data === 0 || v.data === 0n || v.length === 0n) {
             return ""
           }
-          // @ts-ignore - toArrayBuffer pointer type issue
           const buffer = toArrayBuffer(v.data, 0, Number(v.length))
           return new TextDecoder().decode(buffer)
         },
@@ -143,11 +143,10 @@ describe("string packing with graphemes and emojis", () => {
           data: v,
           length: Buffer.byteLength(v),
         }),
-        reduceValue: (v: { data: number; length: bigint }) => {
-          if (v.data === 0 || v.length === 0n) {
+        reduceValue: (v: { data: Pointer; length: bigint }) => {
+          if (v.data === 0 || v.data === 0n || v.length === 0n) {
             return ""
           }
-          // @ts-ignore - toArrayBuffer pointer type issue
           const buffer = toArrayBuffer(v.data, 0, Number(v.length))
           return new TextDecoder().decode(buffer)
         },

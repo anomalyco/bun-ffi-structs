@@ -1,5 +1,5 @@
 import { expect, describe, it } from "bun:test"
-import { toArrayBuffer } from "bun:ffi"
+import { toArrayBuffer } from "../ffi.js"
 import { defineEnum, defineStruct } from "../structs_ffi.js"
 
 describe("field validation", () => {

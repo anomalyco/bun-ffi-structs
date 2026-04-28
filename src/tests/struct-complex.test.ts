@@ -1,5 +1,5 @@
 import { expect, describe, it } from "bun:test"
-import { toArrayBuffer } from "bun:ffi"
+import { toArrayBuffer } from "../ffi.js"
 import { defineEnum, defineStruct } from "../structs_ffi.js"
 
 describe("complex struct with length field and nested arrays", () => {
@@ -88,8 +88,7 @@ describe("complex struct with length field and nested arrays", () => {
     const entryLayout = BindGroupLayoutEntryStruct.describe()
 
     // Read the entries array buffer
-    // @ts-ignore - ignoring the Pointer type error as requested
-    const entriesBuffer = toArrayBuffer(Number(entriesPtr), 0, totalEntriesSize)
+    const entriesBuffer = toArrayBuffer(entriesPtr, 0, totalEntriesSize)
     const entriesView = new DataView(entriesBuffer)
 
     // Get field offsets from the struct layout
@@ -262,7 +261,7 @@ describe("complex struct with length field and nested arrays", () => {
     const textureOffset = entryLayout.find((f) => f.name === "texture")?.offset ?? 0
 
     // @ts-ignore
-    const entriesBuffer = toArrayBuffer(Number(entriesPtr), 0, totalEntriesSize)
+    const entriesBuffer = toArrayBuffer(entriesPtr, 0, totalEntriesSize)
     const entriesView = new DataView(entriesBuffer)
 
     // Verify first entry (buffer with defaults)
