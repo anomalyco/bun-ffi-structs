@@ -1,12 +1,23 @@
-import { beforeAll, describe, expect, it } from "bun:test"
+import { afterAll, beforeAll, describe, expect, it } from "bun:test"
 import { dlopen, ptr, toArrayBuffer } from "bun:ffi"
-import { execSync } from "child_process"
-import { existsSync } from "fs"
+import { execFileSync } from "child_process"
+import { existsSync, rmSync } from "fs"
 import { join } from "path"
 import { defineStruct } from "../structs_ffi.js"
 
 const testDir = __dirname
-const libPath = join(testDir, "libtest.dylib")
+const zigVersion = process.env.ZIG_VERSION ?? "0.15.2"
+const libExt = process.platform === "win32" ? "dll" : process.platform === "darwin" ? "dylib" : "so"
+const libPath = join(testDir, `libtest.${libExt}`)
+
+function zigBuildCommand() {
+  try {
+    execFileSync("zig", ["version"], { stdio: "pipe" })
+    return ["zig"]
+  } catch {
+    return ["zig", zigVersion]
+  }
+}
 
 let native: any
 
@@ -18,7 +29,8 @@ beforeAll(() => {
     throw new Error(`test.zig not found at ${zigFile}`)
   }
 
-  execSync(`zig build-lib ${zigFile} -dynamic -femit-bin=${libPath}`, {
+  const [zigCmd, ...zigPrefixArgs] = zigBuildCommand()
+  execFileSync(zigCmd, [...zigPrefixArgs, "build-lib", zigFile, "-dynamic", `-femit-bin=${libPath}`], {
     cwd: testDir,
     stdio: "inherit",
   })
@@ -51,6 +63,14 @@ beforeAll(() => {
       returns: "bool",
     },
   })
+})
+
+afterAll(() => {
+  native?.close?.()
+
+  if (existsSync(libPath)) {
+    rmSync(libPath)
+  }
 })
 
 describe("Native Zig interop", () => {
