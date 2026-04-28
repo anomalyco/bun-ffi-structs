@@ -37,11 +37,9 @@ jobs:
       - run: ./scripts/build.sh
 
       - name: Publish to NPM
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > dist/.npmrc
-          cd dist && bun publish --access public
+        run: cd dist && bun publish --access public
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
