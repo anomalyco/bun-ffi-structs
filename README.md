@@ -1,6 +1,6 @@
 # bun-ffi-structs
 
-TypeScript FFI struct library for Bun. Define and pack/unpack C-style structs with memory layout control for FFI calls.
+TypeScript struct-packing library for Bun and Node.js `node:ffi` workflows. Define and pack/unpack C-style structs with memory layout control for FFI calls.
 
 ## Features
 
@@ -21,6 +21,8 @@ TypeScript FFI struct library for Bun. Define and pack/unpack C-style structs wi
 ```bash
 bun install bun-ffi-structs
 ```
+
+Using the package on Node.js currently requires `node:ffi` support to be enabled, for example with `--experimental-ffi --allow-ffi` on supported builds.
 
 For local development, use `scripts/link-dev.sh <target-project-root>` to symlink this package into another project's node_modules.
 

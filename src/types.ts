@@ -1,4 +1,4 @@
-import type { Pointer } from "bun:ffi"
+export type Pointer = number | bigint
 
 export type PrimitiveType =
   | "u8"
@@ -15,7 +15,7 @@ export type PrimitiveType =
   | "bool_u32"
 
 export interface PointyObject {
-  ptr: Pointer | number | bigint | null
+  ptr: Pointer | null
 }
 
 export interface ObjectPointerDef<T extends PointyObject> {
@@ -86,7 +86,7 @@ type FieldDefOutputType<
       : Def extends "char*"
         ? HasLengthOfField<AllFields, FieldName> extends true
           ? string | null
-          : number
+          : Pointer
         : Def extends EnumDef<infer E>
           ? keyof E
           : Def extends StructDef<infer OutputType, any>

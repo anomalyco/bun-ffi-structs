@@ -1,12 +1,24 @@
-import { beforeAll, describe, expect, it } from "bun:test"
-import { dlopen, ptr, toArrayBuffer } from "bun:ffi"
-import { execSync } from "child_process"
-import { existsSync } from "fs"
+import { afterAll, beforeAll, describe, expect, it } from "bun:test"
+import { dlopen } from "bun:ffi"
+import { execFileSync } from "child_process"
+import { existsSync, rmSync } from "fs"
 import { join } from "path"
+import { ptr, toArrayBuffer } from "../ffi.js"
 import { defineStruct } from "../structs_ffi.js"
 
 const testDir = __dirname
-const libPath = join(testDir, "libtest.dylib")
+const zigVersion = process.env.ZIG_VERSION ?? "0.15.2"
+const libExt = process.platform === "win32" ? "dll" : process.platform === "darwin" ? "dylib" : "so"
+const libPath = join(testDir, `libtest.${libExt}`)
+
+function zigBuildCommand(): [string, ...string[]] {
+  try {
+    execFileSync("zig", ["version"], { stdio: "pipe" })
+    return ["zig"]
+  } catch {
+    return ["zig", zigVersion]
+  }
+}
 
 let native: any
 
@@ -18,7 +30,8 @@ beforeAll(() => {
     throw new Error(`test.zig not found at ${zigFile}`)
   }
 
-  execSync(`zig build-lib ${zigFile} -dynamic -femit-bin=${libPath}`, {
+  const [zigCmd, ...zigPrefixArgs] = zigBuildCommand()
+  execFileSync(zigCmd, [...zigPrefixArgs, "build-lib", zigFile, "-dynamic", `-femit-bin=${libPath}`], {
     cwd: testDir,
     stdio: "inherit",
   })
@@ -61,6 +74,14 @@ beforeAll(() => {
   })
 })
 
+afterAll(() => {
+  native?.close?.()
+
+  if (existsSync(libPath)) {
+    rmSync(libPath)
+  }
+})
+
 describe("Native Zig interop", () => {
   const SimplePerson = defineStruct([
     ["age", "u32"],
@@ -89,7 +110,7 @@ describe("Native Zig interop", () => {
       const zigPersonPtr = native.symbols.createTestPerson()
       expect(zigPersonPtr).not.toBe(0n)
 
-      const zigBuffer = toArrayBuffer(zigPersonPtr as any, 0, SimplePerson.size)
+      const zigBuffer = toArrayBuffer(zigPersonPtr, 0, SimplePerson.size)
       const unpacked = SimplePerson.unpack(zigBuffer)
 
       expect(unpacked.age).toBe(30)
@@ -284,7 +305,7 @@ describe("Native Zig interop with char* and lengthOf", () => {
 
       const count = 3
       const byteLen = count * HighlightStruct.size
-      const raw = toArrayBuffer(zigListPtr as any, 0, byteLen)
+      const raw = toArrayBuffer(zigListPtr, 0, byteLen)
       const highlights = HighlightStruct.unpackList(raw, count)
 
       expect(highlights).toHaveLength(3)

@@ -1,6 +1,7 @@
 import { expect, describe, it } from "bun:test"
-import { toArrayBuffer } from "bun:ffi"
+import { toArrayBuffer } from "../ffi.js"
 import { defineStruct } from "../structs_ffi.js"
+import type { Pointer } from "../types.js"
 
 describe("struct options", () => {
   it("should apply mapValue transformation", () => {
@@ -26,8 +27,7 @@ describe("struct options", () => {
           data: v,
           length: Buffer.byteLength(v),
         }),
-        reduceValue: (v: { data: number; length: bigint }) => {
-          // @ts-ignore - toArrayBuffer pointer type issue
+        reduceValue: (v: { data: Pointer; length: bigint }) => {
           const buffer = toArrayBuffer(v.data, 0, Number(v.length))
           return new TextDecoder().decode(buffer)
         },
@@ -288,7 +288,7 @@ describe("struct options", () => {
             length: Buffer.byteLength(v),
           }
         },
-        reduceValue: (v: { data: number | null; length: bigint }) => {
+        reduceValue: (v: { data: Pointer | null; length: bigint }) => {
           if (v.data === null || v.length === 0n) {
             return ""
           }

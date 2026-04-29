@@ -1,6 +1,6 @@
 import { expect, describe, it } from "bun:test"
+import { ptr } from "../ffi.js"
 import { defineStruct } from "../structs_ffi.js"
-import { ptr } from "bun:ffi"
 
 describe("char* automatic unpacking", () => {
   it("should automatically unpack char* to string when lengthOf field exists", () => {
@@ -164,9 +164,13 @@ describe("char* automatic unpacking", () => {
     })
     const unpacked = PointerStruct.unpack(packed)
 
-    // Without lengthOf, should return the pointer value (number)
-    expect(typeof unpacked.data).toBe("number")
-    expect(unpacked.data).toBeGreaterThan(0)
+    // Without lengthOf, should return the raw pointer value.
+    expect(["number", "bigint"]).toContain(typeof unpacked.data)
+    if (typeof unpacked.data === "bigint") {
+      expect(unpacked.data).toBeGreaterThan(0n)
+    } else {
+      expect(unpacked.data).toBeGreaterThan(0)
+    }
     expect(unpacked.someOtherField).toBe(42)
   })
 
