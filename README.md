@@ -4,7 +4,7 @@ TypeScript struct-packing library for Bun and Node.js `node:ffi` workflows. Defi
 
 ## Features
 
-- **Type-safe struct definitions** with primitives (u8, u16, u32, u64, i16, i32, f32, f64, bool_u8, bool_u32, pointer)
+- **Type-safe struct definitions** with primitives (u8, u16, u32, u64, i16, i32, i64, f32, f64, bool_u8, bool_u32, pointer)
 - **Enums** with custom base types and bidirectional mapping
 - **Nested structs** (inline or as pointers)
 - **Arrays** of primitives, enums, structs, and object pointers

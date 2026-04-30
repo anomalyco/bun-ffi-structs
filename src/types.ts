@@ -10,6 +10,7 @@ export type PrimitiveType =
   | "pointer"
   | "i32"
   | "i16"
+  | "i64"
   | "bool_u8"
   | "bool_u32"
 
@@ -29,7 +30,7 @@ export type Simplify<T> = T extends (...args: any[]) => any ? T : T extends obje
 
 export type PrimitiveToTSType<T extends PrimitiveType> = T extends "u8" | "u16" | "u32" | "i16" | "i32" | "f32" | "f64"
   ? number
-  : T extends "u64"
+  : T extends "u64" | "i64"
     ? bigint | number
     : T extends "bool_u8" | "bool_u32"
       ? boolean
