@@ -19,6 +19,23 @@ const FFI_LOAD_ERROR = "bun-ffi-structs requires Bun or Node.js with node:ffi en
 
 const backend = await loadBackend()
 
+function unavailable(cause?: unknown): never {
+  throw new Error(FFI_LOAD_ERROR, {
+    cause: cause instanceof Error ? cause : undefined,
+  })
+}
+
+function createUnsupportedBackend(cause?: unknown): FfiBackend {
+  return {
+    ptr() {
+      return unavailable(cause)
+    },
+    toArrayBuffer() {
+      return unavailable(cause)
+    },
+  }
+}
+
 async function loadBackend(): Promise<FfiBackend> {
   if (typeof process !== "undefined" && "bun" in process.versions) {
     return createBunBackend(await importModule<BunFfiModule>("bun:ffi"))
@@ -27,9 +44,7 @@ async function loadBackend(): Promise<FfiBackend> {
   try {
     return createNodeBackend(await importModule<NodeFfiModule>("node:ffi"))
   } catch (error) {
-    throw new Error(FFI_LOAD_ERROR, {
-      cause: error instanceof Error ? error : undefined,
-    })
+    return createUnsupportedBackend(error)
   }
 }
 
