@@ -40,27 +40,29 @@ export type PrimitiveToTSType<T extends PrimitiveType> = T extends "u8" | "u16" 
 
 type FieldDefInputType<Def, Options = undefined> = Options extends { packTransform: (value: infer T) => any }
   ? T
-  : Def extends PrimitiveType
-    ? PrimitiveToTSType<Def>
-    : Def extends "cstring" | "char*"
-      ? string | null
-      : Def extends EnumDef<infer E>
-        ? keyof E
-        : Def extends StructDef<any, infer InputType>
-          ? InputType
-          : Def extends ObjectPointerDef<infer T>
-            ? T | null
-            : Def extends readonly [infer InnerDef]
-              ? InnerDef extends PrimitiveType
-                ? Iterable<PrimitiveToTSType<InnerDef>>
-                : InnerDef extends EnumDef<infer E>
-                  ? Iterable<keyof E>
-                  : InnerDef extends StructDef<any, infer InputType>
-                    ? Iterable<InputType>
-                    : InnerDef extends ObjectPointerDef<infer T>
-                      ? (T | null)[]
-                      : never
-              : never
+  : Def extends "pointer"
+    ? Pointer | ArrayBufferLike | ArrayBufferView
+    : Def extends PrimitiveType
+      ? PrimitiveToTSType<Def>
+      : Def extends "cstring" | "char*"
+        ? string | null
+        : Def extends EnumDef<infer E>
+          ? keyof E
+          : Def extends StructDef<any, infer InputType>
+            ? InputType
+            : Def extends ObjectPointerDef<infer T>
+              ? T | null
+              : Def extends readonly [infer InnerDef]
+                ? InnerDef extends PrimitiveType
+                  ? Iterable<PrimitiveToTSType<InnerDef>>
+                  : InnerDef extends EnumDef<infer E>
+                    ? Iterable<keyof E>
+                    : InnerDef extends StructDef<any, infer InputType>
+                      ? Iterable<InputType>
+                      : InnerDef extends ObjectPointerDef<infer T>
+                        ? (T | null)[]
+                        : never
+                : never
 
 // Helper to check if a field name has a corresponding lengthOf field in the struct
 type HasLengthOfField<Fields extends readonly StructField[], FieldName> = Fields extends readonly [

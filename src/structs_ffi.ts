@@ -332,6 +332,28 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       size = typeSizes[typeOrStruct]
       align = typeAlignments[typeOrStruct]
       ;({ pack, unpack } = primitivePackers(typeOrStruct))
+
+      if (typeOrStruct === "pointer") {
+        // Pointer fields borrow JavaScript memory: when the packed value (possibly
+        // produced by a packTransform) is a buffer or view, serialize its address
+        // and retain the source with the packed struct so the address stays valid
+        // for as long as the struct buffer is alive. Raw addresses pack unchanged;
+        // their owners must be retained by the caller.
+        pack = (view: DataView, off: number, val: any) => {
+          if (val instanceof ArrayBuffer || ArrayBuffer.isView(val)) {
+            if (val.byteLength === 0) {
+              pointerPacker(view, off, null)
+              return
+            }
+
+            pointerPacker(view, off, ptr(val))
+            retainPointerTarget(view.buffer, val)
+            return
+          }
+
+          pointerPacker(view, off, val)
+        }
+      }
       // CString (null-terminated)
     } else if (typeof typeOrStruct === "string" && typeOrStruct === "cstring") {
       size = pointerSize
