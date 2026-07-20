@@ -315,6 +315,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     def: EnumDef<any> | PrimitiveType | "char*"
   }[] = []
   const arrayFieldsMetadata: Record<string, ArrayFieldMetadata> = {}
+  const arrayElementSizes: Record<string, number> = {}
 
   for (const [name, typeOrStruct, options = {}] of fields) {
     if (options.condition && !options.condition()) {
@@ -554,18 +555,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       } else {
         throw new Error(`Unsupported array element type for ${name}: ${JSON.stringify(def)}`)
       }
-
-      // Used for allocStruct
-      const lengthOfField = Object.values(lengthOfFields).find((f) => f.lengthOf === name)
-      if (lengthOfField && isPrimitiveType(lengthOfField.type)) {
-        const { pack: lengthPack } = primitivePackers(lengthOfField.type)
-        arrayFieldsMetadata[name] = {
-          elementSize: arrayElementSize,
-          arrayOffset: alignOffset(offset, align),
-          lengthOffset: lengthOfField.offset,
-          lengthPack,
-        }
-      }
+      arrayElementSizes[name] = arrayElementSize
     } else {
       throw new Error(`Unsupported field type for ${name}: ${JSON.stringify(typeOrStruct)}`)
     }
@@ -646,6 +636,21 @@ export function defineStruct<const Fields extends readonly StructField[], const 
 
     offset += size
     maxAlign = Math.max(maxAlign, align)
+  }
+
+  // Resolve allocation metadata after layout so field declaration order does not matter.
+  for (const [arrayName, lengthOfField] of Object.entries(lengthOfFields)) {
+    const arrayField = layout.find((field) => field.name === arrayName)
+    const elementSize = arrayElementSizes[arrayName]
+    if (!arrayField || elementSize === undefined || !isPrimitiveType(lengthOfField.type)) continue
+
+    const { pack: lengthPack } = primitivePackers(lengthOfField.type)
+    arrayFieldsMetadata[arrayName] = {
+      elementSize,
+      arrayOffset: arrayField.offset,
+      lengthOffset: lengthOfField.offset,
+      lengthPack,
+    }
   }
 
   // Resolve lengthOf fields

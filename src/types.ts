@@ -84,7 +84,7 @@ type FieldDefOutputType<
   : Def extends PrimitiveType
     ? PrimitiveToTSType<Def>
     : Def extends "cstring"
-      ? string | null
+      ? Pointer
       : Def extends "char*"
         ? HasLengthOfField<AllFields, FieldName> extends true
           ? string | null
@@ -94,7 +94,7 @@ type FieldDefOutputType<
           : Def extends StructDef<infer OutputType, any>
             ? OutputType
             : Def extends ObjectPointerDef<infer T>
-              ? T | null
+              ? Pointer
               : Def extends readonly [infer InnerDef]
                 ? InnerDef extends PrimitiveType
                   ? Iterable<PrimitiveToTSType<InnerDef>>

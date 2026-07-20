@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { defineStruct } from "../structs_ffi.js"
+import { allocStruct, defineStruct, pointerSize } from "../structs_ffi.js"
 import { ptr, toArrayBuffer } from "../ffi.js"
 
 async function forceGc() {
@@ -41,6 +41,11 @@ const ColorStruct = defineStruct([
 
 function readColor(address: number | bigint): number[] {
   return [...new Uint16Array(toArrayBuffer(address, 0, 8).slice(0))]
+}
+
+function readPointer(buffer: ArrayBuffer, offset: number): number | bigint {
+  const view = new DataView(buffer)
+  return pointerSize === 8 ? view.getBigUint64(offset, true) : view.getUint32(offset, true)
 }
 
 test("pointer fields accept buffer values and retain them with the packed struct", async () => {
@@ -149,4 +154,50 @@ test("raw addresses still pack unchanged and views keep their byte offsets", () 
   const offsetUnpacked = ColorStruct.unpack(ColorStruct.pack({ id: 4, color: offsetView }))
   expect(BigInt(offsetUnpacked.color!)).toBe(BigInt(ptr(offsetView)))
   expect(readColor(offsetUnpacked.color!)).toEqual([5, 6, 7, 8])
+})
+
+test("cstrings, nested pointers, struct arrays, and allocStruct buffers are retained", async () => {
+  const CStringStruct = defineStruct([["value", "cstring"]] as const)
+  const ChildStruct = defineStruct([["value", "u32"]] as const)
+  const NestedPointerStruct = defineStruct([["child", ChildStruct, { asPointer: true }]] as const)
+  const StructArray = defineStruct([
+    ["count", "u32", { lengthOf: "items" }],
+    ["items", [ChildStruct]],
+  ] as const)
+  const AllocatedArray = defineStruct([
+    ["count", "u32", { lengthOf: "items" }],
+    ["items", ["u32"]],
+  ] as const)
+
+  const createOwners = () => {
+    const cstring = CStringStruct.pack({ value: "retained" })
+    const nested = NestedPointerStruct.pack({ child: { value: 123 } })
+    const structs = StructArray.pack({ items: [{ value: 456 }] })
+    const allocated = allocStruct(AllocatedArray, { lengths: { items: 1 } })
+    new DataView(allocated.subBuffers!.items!).setUint32(0, 789, true)
+    return { cstring, nested, structs, allocated: allocated.buffer }
+  }
+
+  const owners = createOwners()
+  for (let round = 0; round < 25; round++) {
+    const trash = []
+    for (let i = 0; i < 1000; i++) {
+      trash.push(new Uint8Array(4).fill(round), new Uint8Array(9).fill(round))
+    }
+    await forceGc()
+  }
+
+  const cstringPointer = readPointer(owners.cstring, 0)
+  expect(new TextDecoder().decode(toArrayBuffer(cstringPointer, 0, 8))).toBe("retained")
+
+  const nestedPointer = readPointer(owners.nested, 0)
+  expect(new DataView(toArrayBuffer(nestedPointer, 0, ChildStruct.size)).getUint32(0, true)).toBe(123)
+
+  const structsOffset = StructArray.layoutByName.get("items")!.offset
+  const structsPointer = readPointer(owners.structs, structsOffset)
+  expect(new DataView(toArrayBuffer(structsPointer, 0, ChildStruct.size)).getUint32(0, true)).toBe(456)
+
+  const allocatedOffset = AllocatedArray.layoutByName.get("items")!.offset
+  const allocatedPointer = readPointer(owners.allocated, allocatedOffset)
+  expect(new DataView(toArrayBuffer(allocatedPointer, 0, 4)).getUint32(0, true)).toBe(789)
 })
