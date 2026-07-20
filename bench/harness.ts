@@ -7,6 +7,7 @@ export type BenchmarkTier = "core" | "extended" | "stress"
 
 export interface BenchmarkRuntime {
   run(iteration: number): unknown
+  runForMemory?(iteration: number): unknown
   validate(): void
   cleanup?: () => void
   workPerOperation?: number
@@ -19,7 +20,7 @@ export interface BenchmarkScenario {
   name: string
   description: string
   category: string
-  source: "opentui" | "library" | "legacy"
+  source: "opentui" | "bun-webgpu" | "library" | "legacy"
   tier: BenchmarkTier
   setup(): BenchmarkRuntime
 }
@@ -578,7 +579,8 @@ function runMemoryScenario(scenario: BenchmarkScenario, options: BenchmarkOption
 
   try {
     runtime.validate()
-    for (let index = 0; index < Math.min(100, iterations); index += 1) runtime.run(index)
+    const memoryRun = runtime.runForMemory ?? runtime.run
+    for (let index = 0; index < Math.min(100, iterations); index += 1) memoryRun(index)
 
     for (let trial = 0; trial < options.memoryTrials; trial += 1) {
       forceGC()
@@ -596,7 +598,7 @@ function runMemoryScenario(scenario: BenchmarkScenario, options: BenchmarkOption
       let errors = 0
       for (let iteration = 0; iteration < iterations; iteration += 1) {
         try {
-          outputs[iteration] = runtime.run(iteration)
+          outputs[iteration] = memoryRun(iteration)
         } catch {
           errors += 1
         }

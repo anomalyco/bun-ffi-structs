@@ -93,6 +93,23 @@ parsing. Scenarios labeled as isolated unpack components exclude the surrounding
 Generic library scenarios additionally cover allocation versus `packInto`, schema compilation, primitive and enum arrays,
 iterable materialization, nested structs, transforms/validation, UTF-8 scaling, `allocStruct`, and list scaling.
 
+## bun-webgpu Mapping
+
+The local `bun-webgpu` repository currently vendors an older `structs_ffi.ts` implementation rather than importing this package.
+The benchmark mirrors only materially distinct production descriptor graphs that are not already represented by the generic and
+OpenTUI cases:
+
+- Direct `packObjectArray` for the observed one-command-buffer queue submission.
+- Two polymorphic bind-group-layout entries using texture and sampler branches.
+- The triangle example's recursive render-pipeline descriptor with object pointers, struct arrays, defaults, optional inline
+  string views, and pointer-nested fragment state.
+- One render-pass color attachment with a texture-view pointer and clear color.
+- The repeated 128x128 texture-to-buffer path's three descriptor packs.
+
+These scenarios measure serialization only. They exclude Dawn calls, command execution, mapping, image transfer bytes, and caller
+preprocessing. The bind-group-layout schema mirrors bun-webgpu's current platform-conditioned field; this benchmark validates the
+serializer workload and does not claim independent Dawn-header ABI conformance.
+
 ## Legacy Continuity
 
 Every scenario from the benchmark suite that preceded the OpenTUI expansion is retained under `legacy/` using its exact schema,

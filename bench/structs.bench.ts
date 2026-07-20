@@ -1,4 +1,4 @@
-import { allocStruct, defineEnum, defineStruct, pointerSize } from "../src/structs_ffi.js"
+import { allocStruct, defineEnum, defineStruct, objectPtr, packObjectArray, pointerSize } from "../src/structs_ffi.js"
 import { toArrayBuffer } from "../src/ffi.js"
 import type { Pointer, StructDef } from "../src/types.js"
 import { runBenchmarkSuite, type BenchmarkRuntime, type BenchmarkScenario, type BenchmarkTier } from "./harness.js"
@@ -625,6 +625,369 @@ const legacyComplexLists = new Map([
   [10, Array.from({ length: 10 }, () => legacyComplexNestedData)],
   [100, Array.from({ length: 100 }, () => legacyComplexNestedData)],
 ])
+
+// bun-webgpu production descriptor graphs, mirrored from src/structs_def.ts.
+interface WebGPUHandle {
+  ptr: Pointer | null
+}
+
+const WEBGPU_STRLEN = 0xffffffffffffffffn
+const BunWebGPUStringView = defineStruct(
+  [
+    ["data", "char*", { optional: true }],
+    ["length", "u64"],
+  ],
+  {
+    mapValue: (value: string | null | undefined) =>
+      value ? { data: value, length: Buffer.byteLength(value) } : { data: null, length: WEBGPU_STRLEN },
+  },
+)
+
+const BunWebGPUTextureFormat = defineEnum({ undefined: 0, rgba8unorm: 0x12 }, "u32")
+const BunWebGPUBufferBindingType = defineEnum({ "binding-not-used": 0, undefined: 1, uniform: 2, storage: 3 })
+const BunWebGPUSamplerBindingType = defineEnum({
+  "binding-not-used": 0,
+  undefined: 1,
+  filtering: 2,
+  "non-filtering": 3,
+  comparison: 4,
+})
+const BunWebGPUTextureSampleType = defineEnum({
+  "binding-not-used": 0,
+  undefined: 1,
+  float: 2,
+  "unfilterable-float": 3,
+  depth: 4,
+  sint: 5,
+  uint: 6,
+})
+const BunWebGPUTextureViewDimension = defineEnum({
+  undefined: 0,
+  "1d": 1,
+  "2d": 2,
+  "2d-array": 3,
+  cube: 4,
+  "cube-array": 5,
+  "3d": 6,
+})
+const BunWebGPUStorageTextureAccess = defineEnum({
+  "binding-not-used": 0,
+  undefined: 1,
+  "write-only": 2,
+  "read-only": 3,
+  "read-write": 4,
+})
+
+const BunWebGPUBufferBindingLayoutStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["type", BunWebGPUBufferBindingType, { default: "uniform" }],
+  ["hasDynamicOffset", "bool_u32", { default: false }],
+  ["minBindingSize", "u64", { default: 0 }],
+])
+const BunWebGPUSamplerBindingLayoutStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["type", BunWebGPUSamplerBindingType, { default: "filtering" }],
+])
+const BunWebGPUTextureBindingLayoutStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["sampleType", BunWebGPUTextureSampleType, { default: "float" }],
+  ["viewDimension", BunWebGPUTextureViewDimension, { default: "2d" }],
+  ["multisampled", "bool_u32", { default: false }],
+])
+const BunWebGPUStorageTextureBindingLayoutStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["access", BunWebGPUStorageTextureAccess, { default: "write-only" }],
+  ["format", BunWebGPUTextureFormat, { default: "rgba8unorm" }],
+  ["viewDimension", BunWebGPUTextureViewDimension, { default: "2d" }],
+])
+const BunWebGPUBindGroupLayoutEntryStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["binding", "u32"],
+  ["visibility", "u64"],
+  ["_alignment0", "u32", { default: 0, condition: () => process.platform !== "win32" }],
+  ["buffer", BunWebGPUBufferBindingLayoutStruct, { optional: true }],
+  ["sampler", BunWebGPUSamplerBindingLayoutStruct, { optional: true }],
+  ["texture", BunWebGPUTextureBindingLayoutStruct, { optional: true }],
+  ["storageTexture", BunWebGPUStorageTextureBindingLayoutStruct, { optional: true }],
+])
+const BunWebGPUBindGroupLayoutDescriptorStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["label", BunWebGPUStringView, { optional: true }],
+  ["entryCount", "u64", { lengthOf: "entries" }],
+  ["entries", [BunWebGPUBindGroupLayoutEntryStruct]],
+])
+
+const BunWebGPUVertexStepMode = defineEnum({ undefined: 0, vertex: 1, instance: 2 })
+const BunWebGPUPrimitiveTopology = defineEnum({ undefined: 0, "triangle-list": 4 })
+const BunWebGPUIndexFormat = defineEnum({ undefined: 0, uint16: 1, uint32: 2 })
+const BunWebGPUFrontFace = defineEnum({ undefined: 0, ccw: 1, cw: 2 })
+const BunWebGPUCullMode = defineEnum({ undefined: 0, none: 1, front: 2, back: 3 })
+const BunWebGPUVertexFormat = defineEnum({ float32x3: 0x1e }, "u32")
+const BunWebGPUBlendOperation = defineEnum({ undefined: 0, add: 1 })
+const BunWebGPUBlendFactor = defineEnum({ undefined: 0, zero: 1, one: 2 })
+const BunWebGPUCompareFunction = defineEnum({ undefined: 0, always: 8 })
+const BunWebGPUStencilOperation = defineEnum({ undefined: 0, keep: 1 })
+
+const BunWebGPUConstantEntryStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["key", BunWebGPUStringView],
+  [
+    "value",
+    "f64",
+    {
+      validate: (value: number) => {
+        if (!Number.isFinite(value)) throw new TypeError("Pipeline constant value must be finite")
+      },
+    },
+  ],
+])
+const BunWebGPUVertexAttributeStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["format", BunWebGPUVertexFormat],
+  ["offset", "u64"],
+  ["shaderLocation", "u32"],
+])
+const BunWebGPUVertexBufferLayoutStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["stepMode", BunWebGPUVertexStepMode, { default: "vertex" }],
+  ["arrayStride", "u64"],
+  ["attributeCount", "u64", { lengthOf: "attributes" }],
+  ["attributes", [BunWebGPUVertexAttributeStruct]],
+])
+const BunWebGPUVertexStateStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["module", objectPtr<WebGPUHandle>()],
+  ["entryPoint", BunWebGPUStringView, { optional: true, mapOptionalInline: true }],
+  ["constantCount", "u64", { lengthOf: "constants" }],
+  ["constants", [BunWebGPUConstantEntryStruct], { optional: true }],
+  ["bufferCount", "u64", { lengthOf: "buffers" }],
+  ["buffers", [BunWebGPUVertexBufferLayoutStruct], { optional: true }],
+])
+const BunWebGPUPrimitiveStateStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["topology", BunWebGPUPrimitiveTopology, { default: "triangle-list" }],
+  ["stripIndexFormat", BunWebGPUIndexFormat, { default: "undefined" }],
+  ["frontFace", BunWebGPUFrontFace, { default: "ccw" }],
+  ["cullMode", BunWebGPUCullMode, { default: "none" }],
+  ["unclippedDepth", "bool_u32", { optional: true }],
+])
+const BunWebGPUStencilFaceStateStruct = defineStruct([
+  ["compare", BunWebGPUCompareFunction, { default: "always" }],
+  ["failOp", BunWebGPUStencilOperation, { default: "keep" }],
+  ["depthFailOp", BunWebGPUStencilOperation, { default: "keep" }],
+  ["passOp", BunWebGPUStencilOperation, { default: "keep" }],
+])
+const BunWebGPUDepthStencilStateStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["format", BunWebGPUTextureFormat],
+  ["depthWriteEnabled", "bool_u32", { default: false }],
+  ["depthCompare", BunWebGPUCompareFunction, { default: "always" }],
+  ["stencilFront", BunWebGPUStencilFaceStateStruct, { default: {} }],
+  ["stencilBack", BunWebGPUStencilFaceStateStruct, { default: {} }],
+  ["stencilReadMask", "u32", { default: 0xffffffff }],
+  ["stencilWriteMask", "u32", { default: 0xffffffff }],
+  ["depthBias", "i32", { default: 0 }],
+  ["depthBiasSlopeScale", "f32", { default: 0 }],
+  ["depthBiasClamp", "f32", { default: 0 }],
+])
+const BunWebGPUMultisampleStateStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["count", "u32", { default: 1 }],
+  ["mask", "u32", { default: 0xffffffff }],
+  ["alphaToCoverageEnabled", "bool_u32", { default: false }],
+])
+const BunWebGPUBlendComponentStruct = defineStruct([
+  ["operation", BunWebGPUBlendOperation, { default: "add" }],
+  ["srcFactor", BunWebGPUBlendFactor, { default: "one" }],
+  ["dstFactor", BunWebGPUBlendFactor, { default: "zero" }],
+])
+const BunWebGPUBlendStateStruct = defineStruct([
+  ["color", BunWebGPUBlendComponentStruct],
+  ["alpha", BunWebGPUBlendComponentStruct],
+])
+const BunWebGPUColorTargetStateStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["format", BunWebGPUTextureFormat],
+  ["blend", BunWebGPUBlendStateStruct, { optional: true, asPointer: true }],
+  ["writeMask", "u64", { default: 0xfn }],
+])
+const BunWebGPUFragmentStateStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["module", objectPtr<WebGPUHandle>()],
+  ["entryPoint", BunWebGPUStringView, { optional: true, mapOptionalInline: true }],
+  ["constantCount", "u64", { lengthOf: "constants" }],
+  ["constants", [BunWebGPUConstantEntryStruct], { optional: true }],
+  ["targetCount", "u64", { lengthOf: "targets" }],
+  ["targets", [BunWebGPUColorTargetStateStruct]],
+])
+const BunWebGPURenderPipelineDescriptorStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["label", BunWebGPUStringView, { optional: true }],
+  ["layout", objectPtr<WebGPUHandle>(), { optional: true }],
+  ["vertex", BunWebGPUVertexStateStruct],
+  ["primitive", BunWebGPUPrimitiveStateStruct, { default: {} }],
+  ["depthStencil", BunWebGPUDepthStencilStateStruct, { optional: true, asPointer: true }],
+  ["multisample", BunWebGPUMultisampleStateStruct, { default: {} }],
+  ["fragment", BunWebGPUFragmentStateStruct, { optional: true, asPointer: true }],
+])
+
+const BunWebGPULoadOp = defineEnum({ undefined: 0, load: 1, clear: 2 }, "u32")
+const BunWebGPUStoreOp = defineEnum({ undefined: 0, store: 1, discard: 2 }, "u32")
+const BunWebGPUColorStruct = defineStruct(
+  [
+    ["r", "f64"],
+    ["g", "f64"],
+    ["b", "f64"],
+    ["a", "f64"],
+  ],
+  {
+    default: { r: 0, g: 0, b: 0, a: 0 },
+    mapValue: (value?: { r: number; g: number; b: number; a: number } | number[]) => {
+      if (!value) return null
+      return Array.isArray(value) ? { r: value[0], g: value[1], b: value[2], a: value[3] } : value
+    },
+  },
+)
+const BunWebGPURenderPassColorAttachmentStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["view", objectPtr<WebGPUHandle>()],
+  ["depthSlice", "u32", { default: 0xffffffff }],
+  ["resolveTarget", objectPtr<WebGPUHandle>(), { optional: true }],
+  ["loadOp", BunWebGPULoadOp],
+  ["storeOp", BunWebGPUStoreOp],
+  ["clearValue", BunWebGPUColorStruct, { default: { r: 0, g: 0, b: 0, a: 0 } }],
+])
+const BunWebGPURenderPassDepthStencilAttachmentStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["view", objectPtr<WebGPUHandle>()],
+  ["depthLoadOp", BunWebGPULoadOp, { optional: true }],
+  ["depthStoreOp", BunWebGPUStoreOp, { optional: true }],
+  ["depthClearValue", "f32", { default: Number.NaN }],
+  ["depthReadOnly", "bool_u32", { default: false }],
+  ["stencilLoadOp", BunWebGPULoadOp, { optional: true }],
+  ["stencilStoreOp", BunWebGPUStoreOp, { optional: true }],
+  ["stencilClearValue", "u32", { default: 0 }],
+  ["stencilReadOnly", "bool_u32", { default: false }],
+])
+const BunWebGPUPassTimestampWritesStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["querySet", objectPtr<WebGPUHandle>()],
+  ["beginningOfPassWriteIndex", "u32", { default: 0xffffffff }],
+  ["endOfPassWriteIndex", "u32", { default: 0xffffffff }],
+])
+const BunWebGPURenderPassDescriptorStruct = defineStruct([
+  ["nextInChain", "pointer", { optional: true }],
+  ["label", BunWebGPUStringView, { optional: true }],
+  ["colorAttachmentCount", "u64", { lengthOf: "colorAttachments" }],
+  ["colorAttachments", [BunWebGPURenderPassColorAttachmentStruct], { optional: true }],
+  ["depthStencilAttachment", BunWebGPURenderPassDepthStencilAttachmentStruct, { optional: true, asPointer: true }],
+  ["occlusionQuerySet", objectPtr<WebGPUHandle>(), { optional: true }],
+  ["timestampWrites", BunWebGPUPassTimestampWritesStruct, { optional: true, asPointer: true }],
+])
+
+const BunWebGPUTextureAspect = defineEnum({ undefined: 0, all: 1 }, "u32")
+const BunWebGPUOrigin3DStruct = defineStruct(
+  [
+    ["x", "u32", { default: 0 }],
+    ["y", "u32", { default: 0 }],
+    ["z", "u32", { default: 0 }],
+  ],
+  {
+    mapValue: (value: Iterable<number> | { x?: number; y?: number; z?: number }) => {
+      if (Symbol.iterator in value) {
+        const array = Array.from(value as Iterable<number>)
+        return { x: array[0] ?? 0, y: array[1] ?? 0, z: array[2] ?? 0 }
+      }
+      return value
+    },
+  },
+)
+const BunWebGPUExtent3DStruct = defineStruct(
+  [
+    ["width", "u32"],
+    ["height", "u32", { default: 1 }],
+    ["depthOrArrayLayers", "u32", { default: 1 }],
+  ],
+  {
+    mapValue: (value: Iterable<number> | { width: number; height?: number; depthOrArrayLayers?: number }) => {
+      if (Symbol.iterator in value) {
+        const array = Array.from(value as Iterable<number>)
+        return { width: array[0] ?? 1, height: array[1] ?? 1, depthOrArrayLayers: array[2] ?? 1 }
+      }
+      return value
+    },
+  },
+)
+const BunWebGPUTexelCopyBufferLayoutStruct = defineStruct([
+  ["offset", "u64", { default: 0 }],
+  ["bytesPerRow", "u32", { default: 0xffffffff }],
+  ["rowsPerImage", "u32", { default: 0xffffffff }],
+])
+const BunWebGPUTexelCopyBufferInfoStruct = defineStruct(
+  [
+    ["layout", BunWebGPUTexelCopyBufferLayoutStruct],
+    ["buffer", objectPtr<WebGPUHandle>()],
+  ],
+  {
+    mapValue: (value: { buffer: WebGPUHandle; offset?: number; bytesPerRow: number; rowsPerImage: number }) => ({
+      layout: {
+        offset: value.offset ?? 0,
+        bytesPerRow: value.bytesPerRow,
+        rowsPerImage: value.rowsPerImage,
+      },
+      buffer: value.buffer,
+    }),
+  },
+)
+const BunWebGPUTexelCopyTextureInfoStruct = defineStruct([
+  ["texture", objectPtr<WebGPUHandle>()],
+  ["mipLevel", "u32", { default: 0 }],
+  ["origin", BunWebGPUOrigin3DStruct, { default: { x: 0, y: 0, z: 0 } }],
+  ["aspect", BunWebGPUTextureAspect, { default: "all" }],
+])
+
+const bunWebGPUCommandBuffers: WebGPUHandle[] = [{ ptr: 0x100000 }]
+const bunWebGPUBindGroupLayoutValue = {
+  label: "Test Basic Texture+Sampler BGL",
+  entries: [
+    { binding: 2, visibility: 2n, texture: {} },
+    { binding: 1, visibility: 2n, sampler: {} },
+  ],
+}
+const bunWebGPURenderPipelineValue = {
+  layout: { ptr: 0x100000 },
+  vertex: {
+    module: { ptr: 0x110000 },
+    constants: [],
+    buffers: [
+      {
+        arrayStride: 12,
+        attributes: [{ format: "float32x3" as const, offset: 0, shaderLocation: 0 }],
+      },
+    ],
+  },
+  fragment: {
+    module: { ptr: 0x120000 },
+    constants: [],
+    targets: [{ format: "rgba8unorm" as const }],
+  },
+  primitive: { topology: "triangle-list" as const },
+}
+const bunWebGPURenderPassValue = {
+  colorAttachments: [
+    {
+      view: { ptr: 0x200000 },
+      loadOp: "clear" as const,
+      storeOp: "store" as const,
+      clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1 },
+    },
+  ],
+}
+const bunWebGPUTextureCopyValue = {
+  source: { texture: { ptr: 0x300000 } },
+  destination: { buffer: { ptr: 0x310000 }, bytesPerRow: 512, rowsPerImage: 128 },
+  extent: { width: 128, height: 128 },
+}
 
 const red: BenchColor = { buffer: new Uint16Array([65535, 0, 0, 65535]) }
 const green: BenchColor = { buffer: new Uint16Array([0, 65535, 0, 65535]) }
@@ -1516,6 +1879,283 @@ scenarios.push(
         workPerOperation: fields.length,
         workLabel: "fields",
         memoryIterations: 100,
+      }
+    },
+  ),
+)
+
+scenarios.push(
+  scenario(
+    "bun-webgpu/queue-submit/pack-object-array/1",
+    "Direct packObjectArray path used for a one-command-buffer queue submission",
+    "queue-submit",
+    "bun-webgpu",
+    "core",
+    () => ({
+      run: () => packObjectArray(bunWebGPUCommandBuffers),
+      validate: () => {
+        const packed = packObjectArray(bunWebGPUCommandBuffers)
+        assertEqual(packed.byteLength, pointerSize, "queue pointer-array bytes")
+        assertEqual(readPointer(packed, 0), 0x100000n, "queue command-buffer pointer")
+      },
+      workPerOperation: 1,
+      workLabel: "command buffers",
+      bytesPerOperation: pointerSize,
+      memoryIterations: 20_000,
+    }),
+  ),
+  packScenario({
+    name: "bun-webgpu/bind-group-layout/pack/texture-sampler-2",
+    description: "Two polymorphic bind-group-layout entries using texture and sampler inline branches",
+    category: "bind-group-layout",
+    source: "bun-webgpu",
+    tier: "extended",
+    struct: BunWebGPUBindGroupLayoutDescriptorStruct,
+    value: bunWebGPUBindGroupLayoutValue,
+    bytes:
+      BunWebGPUBindGroupLayoutDescriptorStruct.size +
+      BunWebGPUBindGroupLayoutEntryStruct.size * 2 +
+      Buffer.byteLength(bunWebGPUBindGroupLayoutValue.label),
+    workPerOperation: 2,
+    workLabel: "bindings",
+    memoryIterations: 500,
+    validate: (buffer) => {
+      const view = new DataView(buffer)
+      assertEqual(
+        view.getBigUint64(BunWebGPUBindGroupLayoutDescriptorStruct.layoutByName.get("entryCount")!.offset, true),
+        2n,
+        "bind-group-layout entry count",
+      )
+      const entriesPointer = readPointer(
+        view,
+        BunWebGPUBindGroupLayoutDescriptorStruct.layoutByName.get("entries")!.offset,
+      )
+      assert(entriesPointer !== 0n, "bind-group-layout entries pointer")
+      const entriesView = new DataView(toArrayBuffer(entriesPointer, 0, BunWebGPUBindGroupLayoutEntryStruct.size * 2))
+      assertEqual(
+        entriesView.getUint32(BunWebGPUBindGroupLayoutEntryStruct.layoutByName.get("binding")!.offset, true),
+        2,
+        "texture binding",
+      )
+      const textureOffset = BunWebGPUBindGroupLayoutEntryStruct.layoutByName.get("texture")!.offset
+      assertEqual(
+        entriesView.getUint32(
+          textureOffset + BunWebGPUTextureBindingLayoutStruct.layoutByName.get("sampleType")!.offset,
+          true,
+        ),
+        2,
+        "texture sample type",
+      )
+      const secondEntry = BunWebGPUBindGroupLayoutEntryStruct.size
+      const samplerOffset = BunWebGPUBindGroupLayoutEntryStruct.layoutByName.get("sampler")!.offset
+      assertEqual(
+        entriesView.getUint32(
+          secondEntry + samplerOffset + BunWebGPUSamplerBindingLayoutStruct.layoutByName.get("type")!.offset,
+          true,
+        ),
+        2,
+        "sampler binding type",
+      )
+    },
+  }),
+  packScenario({
+    name: "bun-webgpu/render-pipeline/pack/triangle",
+    description:
+      "Triangle render-pipeline graph with object pointers, struct arrays, defaults, and pointer-nested fragment",
+    category: "render-pipeline",
+    source: "bun-webgpu",
+    tier: "extended",
+    struct: BunWebGPURenderPipelineDescriptorStruct,
+    value: bunWebGPURenderPipelineValue,
+    bytes:
+      BunWebGPURenderPipelineDescriptorStruct.size +
+      BunWebGPUVertexBufferLayoutStruct.size +
+      BunWebGPUVertexAttributeStruct.size +
+      BunWebGPUFragmentStateStruct.size +
+      BunWebGPUColorTargetStateStruct.size,
+    memoryIterations: 500,
+    validate: (buffer) => {
+      const view = new DataView(buffer)
+      assertEqual(
+        readPointer(view, BunWebGPURenderPipelineDescriptorStruct.layoutByName.get("layout")!.offset),
+        0x100000n,
+        "pipeline layout pointer",
+      )
+      const vertexOffset = BunWebGPURenderPipelineDescriptorStruct.layoutByName.get("vertex")!.offset
+      assertEqual(
+        readPointer(view, vertexOffset + BunWebGPUVertexStateStruct.layoutByName.get("module")!.offset),
+        0x110000n,
+        "vertex module pointer",
+      )
+      assertEqual(
+        view.getBigUint64(vertexOffset + BunWebGPUVertexStateStruct.layoutByName.get("bufferCount")!.offset, true),
+        1n,
+        "vertex buffer count",
+      )
+      const buffersPointer = readPointer(
+        view,
+        vertexOffset + BunWebGPUVertexStateStruct.layoutByName.get("buffers")!.offset,
+      )
+      assert(buffersPointer !== 0n, "vertex buffers pointer")
+      const vertexBufferView = new DataView(toArrayBuffer(buffersPointer, 0, BunWebGPUVertexBufferLayoutStruct.size))
+      assertEqual(
+        vertexBufferView.getBigUint64(BunWebGPUVertexBufferLayoutStruct.layoutByName.get("arrayStride")!.offset, true),
+        12n,
+        "vertex array stride",
+      )
+      const attributesPointer = readPointer(
+        vertexBufferView,
+        BunWebGPUVertexBufferLayoutStruct.layoutByName.get("attributes")!.offset,
+      )
+      assert(attributesPointer !== 0n, "vertex attributes pointer")
+      const attributeView = new DataView(toArrayBuffer(attributesPointer, 0, BunWebGPUVertexAttributeStruct.size))
+      assertEqual(
+        attributeView.getUint32(BunWebGPUVertexAttributeStruct.layoutByName.get("format")!.offset, true),
+        0x1e,
+        "vertex attribute format",
+      )
+      const primitiveOffset = BunWebGPURenderPipelineDescriptorStruct.layoutByName.get("primitive")!.offset
+      assertEqual(
+        view.getUint32(primitiveOffset + BunWebGPUPrimitiveStateStruct.layoutByName.get("topology")!.offset, true),
+        4,
+        "primitive topology",
+      )
+      const fragmentPointer = readPointer(
+        view,
+        BunWebGPURenderPipelineDescriptorStruct.layoutByName.get("fragment")!.offset,
+      )
+      assert(fragmentPointer !== 0n, "fragment pointer")
+      const fragmentView = new DataView(toArrayBuffer(fragmentPointer, 0, BunWebGPUFragmentStateStruct.size))
+      assertEqual(
+        readPointer(fragmentView, BunWebGPUFragmentStateStruct.layoutByName.get("module")!.offset),
+        0x120000n,
+        "fragment module pointer",
+      )
+      assertEqual(
+        fragmentView.getBigUint64(BunWebGPUFragmentStateStruct.layoutByName.get("targetCount")!.offset, true),
+        1n,
+        "fragment target count",
+      )
+      const targetsPointer = readPointer(fragmentView, BunWebGPUFragmentStateStruct.layoutByName.get("targets")!.offset)
+      assert(targetsPointer !== 0n, "fragment targets pointer")
+      const targetView = new DataView(toArrayBuffer(targetsPointer, 0, BunWebGPUColorTargetStateStruct.size))
+      assertEqual(
+        targetView.getUint32(BunWebGPUColorTargetStateStruct.layoutByName.get("format")!.offset, true),
+        0x12,
+        "fragment target format",
+      )
+    },
+  }),
+  packScenario({
+    name: "bun-webgpu/render-pass/pack/clear-color-1",
+    description: "One render-pass color attachment with texture-view pointer and clear color",
+    category: "render-pass",
+    source: "bun-webgpu",
+    tier: "core",
+    struct: BunWebGPURenderPassDescriptorStruct,
+    value: bunWebGPURenderPassValue,
+    bytes: BunWebGPURenderPassDescriptorStruct.size + BunWebGPURenderPassColorAttachmentStruct.size,
+    workPerOperation: 1,
+    workLabel: "color attachments",
+    memoryIterations: 5_000,
+    validate: (buffer) => {
+      const view = new DataView(buffer)
+      assertEqual(
+        view.getBigUint64(BunWebGPURenderPassDescriptorStruct.layoutByName.get("colorAttachmentCount")!.offset, true),
+        1n,
+        "render-pass attachment count",
+      )
+      const attachmentsPointer = readPointer(
+        view,
+        BunWebGPURenderPassDescriptorStruct.layoutByName.get("colorAttachments")!.offset,
+      )
+      assert(attachmentsPointer !== 0n, "render-pass attachments pointer")
+      const attachmentView = new DataView(
+        toArrayBuffer(attachmentsPointer, 0, BunWebGPURenderPassColorAttachmentStruct.size),
+      )
+      assertEqual(
+        readPointer(attachmentView, BunWebGPURenderPassColorAttachmentStruct.layoutByName.get("view")!.offset),
+        0x200000n,
+        "render-pass texture-view pointer",
+      )
+      assertEqual(
+        attachmentView.getUint32(BunWebGPURenderPassColorAttachmentStruct.layoutByName.get("loadOp")!.offset, true),
+        2,
+        "render-pass load op",
+      )
+      assertEqual(
+        attachmentView.getUint32(BunWebGPURenderPassColorAttachmentStruct.layoutByName.get("storeOp")!.offset, true),
+        1,
+        "render-pass store op",
+      )
+      const clearOffset = BunWebGPURenderPassColorAttachmentStruct.layoutByName.get("clearValue")!.offset
+      assertEqual(
+        attachmentView.getFloat64(clearOffset + BunWebGPUColorStruct.layoutByName.get("a")!.offset, true),
+        1,
+        "render-pass clear alpha",
+      )
+    },
+  }),
+  scenario(
+    "bun-webgpu/texture-copy/pack/texture-to-buffer-128x128",
+    "Three descriptor packs used by the repeated 128x128 texture-to-buffer readback path",
+    "texture-copy",
+    "bun-webgpu",
+    "core",
+    () => {
+      const packDescriptors = () => ({
+        source: BunWebGPUTexelCopyTextureInfoStruct.pack(bunWebGPUTextureCopyValue.source),
+        destination: BunWebGPUTexelCopyBufferInfoStruct.pack(bunWebGPUTextureCopyValue.destination),
+        extent: BunWebGPUExtent3DStruct.pack(bunWebGPUTextureCopyValue.extent),
+      })
+      return {
+        run: () => {
+          BunWebGPUTexelCopyTextureInfoStruct.pack(bunWebGPUTextureCopyValue.source)
+          BunWebGPUTexelCopyBufferInfoStruct.pack(bunWebGPUTextureCopyValue.destination)
+          BunWebGPUExtent3DStruct.pack(bunWebGPUTextureCopyValue.extent)
+        },
+        runForMemory: () => packDescriptors(),
+        validate: () => {
+          const { source, destination, extent } = packDescriptors()
+          assertEqual(
+            readPointer(new DataView(source), BunWebGPUTexelCopyTextureInfoStruct.layoutByName.get("texture")!.offset),
+            0x300000n,
+            "copy source texture pointer",
+          )
+          const destinationView = new DataView(destination)
+          assertEqual(
+            readPointer(destinationView, BunWebGPUTexelCopyBufferInfoStruct.layoutByName.get("buffer")!.offset),
+            0x310000n,
+            "copy destination buffer pointer",
+          )
+          const layoutOffset = BunWebGPUTexelCopyBufferInfoStruct.layoutByName.get("layout")!.offset
+          assertEqual(
+            destinationView.getUint32(
+              layoutOffset + BunWebGPUTexelCopyBufferLayoutStruct.layoutByName.get("bytesPerRow")!.offset,
+              true,
+            ),
+            512,
+            "copy bytes per row",
+          )
+          const extentView = new DataView(extent)
+          assertEqual(
+            extentView.getUint32(BunWebGPUExtent3DStruct.layoutByName.get("width")!.offset, true),
+            128,
+            "copy width",
+          )
+          assertEqual(
+            extentView.getUint32(BunWebGPUExtent3DStruct.layoutByName.get("height")!.offset, true),
+            128,
+            "copy height",
+          )
+        },
+        workPerOperation: 1,
+        workLabel: "copy descriptor triplets",
+        bytesPerOperation:
+          BunWebGPUTexelCopyTextureInfoStruct.size +
+          BunWebGPUTexelCopyBufferInfoStruct.size +
+          BunWebGPUExtent3DStruct.size,
+        memoryIterations: 5_000,
       }
     },
   ),
