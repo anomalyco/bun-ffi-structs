@@ -1,5 +1,6 @@
 import { expect, describe, it } from "bun:test"
-import { defineEnum, defineStruct, objectPtr, allocStruct } from "../structs_ffi.js"
+import { ptr } from "../ffi.js"
+import { defineEnum, defineStruct, objectPtr, allocStruct, pointerSize } from "../structs_ffi.js"
 
 describe("struct utilities", () => {
   it("should allocate struct buffer", () => {
@@ -53,10 +54,18 @@ describe("struct utilities", () => {
       const itemCount = view.getUint32(itemCountField.offset, true)
       expect(itemCount).toBe(5)
 
-      // Verify items pointer was set
+      // Verify the struct points to the allocated items buffer.
       const itemsField = layout.find((f) => f.name === "items")!
-      const itemsPtr = view.getBigUint64(itemsField.offset, true)
-      expect(itemsPtr).not.toBe(0n)
+      const itemsPtr =
+        pointerSize === 8 ? view.getBigUint64(itemsField.offset, true) : BigInt(view.getUint32(itemsField.offset, true))
+      const itemsBuffer = subBuffers!.items!
+      expect(itemsPtr).toBe(BigInt(ptr(itemsBuffer)))
+
+      const itemsView = new DataView(itemsBuffer)
+      for (let i = 0; i < 5; i++) {
+        itemsView.setUint32(i * 4, i + 1, true)
+      }
+      expect(TestStruct.unpack(buffer).items).toEqual([1, 2, 3, 4, 5])
     })
 
     it("should allocate correct sizes for different primitive types", () => {

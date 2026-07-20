@@ -559,7 +559,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         const { pack: lengthPack } = primitivePackers(lengthOfField.type)
         arrayFieldsMetadata[name] = {
           elementSize: arrayElementSize,
-          arrayOffset: offset,
+          arrayOffset: alignOffset(offset, align),
           lengthOffset: lengthOfField.offset,
           lengthPack,
         }
