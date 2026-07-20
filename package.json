@@ -22,14 +22,16 @@
   "scripts": {
     "test": "bun test",
     "bench": "bun run bench/structs.bench.ts",
+    "bench:quick": "bun run bench/structs.bench.ts --profile quick",
+    "bench:full": "bun run bench/structs.bench.ts --profile full --allow-unstable",
+    "bench:strict": "bun run bench/structs.bench.ts --profile full",
     "prettier:check": "bun prettier --check .",
     "prettier:write": "bun prettier --write .",
     "build": "./scripts/build.sh"
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "prettier": "3.6.2",
-    "tinybench": "^5.0.1"
+    "prettier": "3.6.2"
   },
   "peerDependencies": {
     "typescript": "^5"
