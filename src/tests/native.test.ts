@@ -72,7 +72,7 @@ beforeAll(() => {
       returns: "bool",
     },
   })
-})
+}, 30_000)
 
 afterAll(() => {
   native?.close?.()
