@@ -1,11 +1,12 @@
 # Benchmarks
 
-The benchmark suite combines OpenTUI production layouts with generic scaling cases for `bun-ffi-structs`.
+The benchmark suite combines OpenTUI production layouts, generic scaling cases, and the complete pre-expansion benchmark set for
+`bun-ffi-structs`. Timing and statistics use [Tinybench 6.0.2](https://tinylibs.github.io/tinybench/).
 
 ## Run
 
 ```bash
-# Production-focused default profile
+# Production, generic, and legacy scenarios except stress-scale cases
 bun run bench
 
 # Fast correctness and harness smoke run
@@ -30,12 +31,14 @@ bun run bench -- --filter styled-chunks --memory --memory-trials 5
 
 Useful controls:
 
-- `--iterations`, `--warmup`, `--rounds`, and `--min-sample-ms` configure sampling.
-- `--max-rme` sets the maximum accepted 95% relative margin of error.
-- `--max-attempts` controls automatic retries with longer samples.
-- `--max-batch` caps a calibrated batch before the duration loop repeats it.
-- `--allow-unstable` reports high-RME results without failing the process.
-- `--verbose` prints every measured round.
+- `--time` and `--iterations` set Tinybench's minimum measured duration and invocation count.
+- `--warmup-time`, `--warmup-iterations`, and `--no-warmup` configure Tinybench warmup.
+- `--retain-samples` includes Tinybench's sorted latency and throughput samples in JSON.
+- `--max-rme` sets the maximum accepted Tinybench 95% latency RME in strict mode.
+- `--strict-rme` enables longer-sample retries and failure when RME remains above the limit.
+- `--max-attempts` controls strict-mode retries with longer samples.
+- `--allow-unstable` disables only the strict RME failure; operation errors still fail.
+- `--verbose` prints Tinybench mean, SD, SEM, MOE, critical value, and execution details.
 - `--quiet` suppresses terminal tables while preserving validation, exit status, and optional JSON output.
 - `BENCH_PROFILE`, `BENCH_FILTER`, `BENCH_COMMIT`, and `GITHUB_SHA` provide environment equivalents or metadata.
 
@@ -45,21 +48,25 @@ Each scenario:
 
 1. Creates fixtures outside the measured region.
 2. Runs a correctness preflight.
-3. Warms up before calibration.
-4. Calibrates a batch to a minimum sample duration.
-5. Measures independent rounds with `process.hrtime.bigint()`.
-6. Reports median and p95 latency, sample standard deviation, Student-t 95% RME, throughput, and operation error rate.
-7. Retries unstable results with longer samples and fails if errors occur or RME remains above the configured limit.
+3. Runs in a fresh synchronous Tinybench instance with `async: false`, `throws: true`, and `bunNanoseconds` timestamps.
+4. Uses Tinybench's automatic warmup and minimum time/iteration stopping conditions.
+5. Reports Tinybench p50/p75/p99/p99.5/p99.9, sample variance, SD, SEM, Student-t critical value, MOE, RME, and throughput.
+6. Counts attempted operations and the first operation error before Tinybench stops the failed task.
+7. Retries high-RME results in a fresh Tinybench instance with a longer measured duration.
 
 Unpack scenarios use prebuilt buffers. They do not include packing in the timed operation. List and array cases report both
-call-level latency and normalized item throughput. A global checksum consumes results so benchmark calls remain observable.
-The quick profile is a smoke run with a deliberately broad RME allowance. Default and full profiles enforce tighter RME limits
-and fail if a result remains unstable after progressively longer retries; `--allow-unstable` is an explicit reporting-only mode.
-The `bench:full` convenience script uses reporting-only mode because allocation-heavy stress scenarios can expose genuine GC
-variance; operation errors still fail. `bench:strict` applies the full profile's 5% RME gate.
+call-level latency and normalized item throughput. Timed callbacks discard return values so Tinybench never receives its reserved
+`{ overriddenDuration }` result shape; a scenario-name checksum is recorded outside timing for run identification.
+Tinybench stops a task at its first thrown operation; the reported error percentage uses that failure and the number of attempted
+invocations up to the stop rather than pretending failed iterations continued.
+Normal quick, default, and full runs report Tinybench RME without treating host noise as a correctness failure, matching OpenTUI's
+reporting convention. `bench:strict` retries unstable tasks with longer Tinybench durations and applies the full profile's 5% RME
+gate. Operation errors fail every mode.
 
-JSON output includes raw rounds, configuration, Bun/Node/V8 versions, OS, architecture, CPU model, logical CPU count, error
-counts, and the checksum.
+JSON output includes Tinybench statistics, configuration, Bun/Node/V8 versions, OS, architecture, CPU model, logical CPU count,
+error counts, and the checksum. Raw Tinybench samples are included only with `--retain-samples`.
+Tinybench's raw latency statistics and samples are milliseconds, and throughput statistics are operations/second; derived display
+fields ending in `Ns` are nanoseconds.
 
 The optional memory mode runs repeated trials with forced GC and subtracts a same-sized retention-array control. It reports
 retained output memory, not transient peak allocation or a leak claim. RSS and heap reservation remain runtime-level signals and
@@ -80,8 +87,20 @@ Production schemas mirror `packages/core/src/zig-structs.ts` in OpenTUI. Scenari
 OpenTUI establishes a one-chunk case for plain strings and a 256-record maximum for span drains. It does not establish an
 empirical distribution for styled chunk counts, viewport heights, document lengths, highlight counts, or Unicode output sizes.
 The larger values in this suite are therefore labeled extended or stress scaling cases rather than claimed production averages.
-OpenTUI's `normalizeColorValue` work is outside this library; styled-color scenarios begin with the owning RGBA buffers consumed
-by `bun-ffi-structs`. Scenarios labeled as isolated unpack components exclude the surrounding native call and renderer work.
+Styled-color scenarios mirror OpenTUI's normalization path for existing RGBA owners; they do not claim to measure string color
+parsing. Scenarios labeled as isolated unpack components exclude the surrounding native call and renderer work.
 
 Generic library scenarios additionally cover allocation versus `packInto`, schema compilation, primitive and enum arrays,
 iterable materialization, nested structs, transforms/validation, UTF-8 scaling, `allocStruct`, and list scaling.
+
+## Legacy Continuity
+
+Every scenario from the benchmark suite that preceded the OpenTUI expansion is retained under `legacy/` using its exact schema,
+fixture, cardinality, and memory-iteration setting.
+
+- `legacy/.../pack` preserves the previous pack callback.
+- `legacy/.../roundtrip` preserves the previous tasks named “unpack”, whose callbacks actually packed and then unpacked.
+- `legacy/.../unpack-only` adds the corrected isolated unpack measurement using a prebuilt buffer.
+
+This covers the original simple, medium, nested, complex, and massive structs; arrays at 10/100/1,000/10,000 elements; both
+two-array cases; and every original simple, medium, and complex list size.

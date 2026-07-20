@@ -9,20 +9,17 @@ const baseArgs = [
   "--profile",
   "quick",
   "--iterations",
-  "1",
-  "--warmup",
-  "1",
-  "--rounds",
   "2",
-  "--min-sample-ms",
+  "--time",
   "1",
-  "--max-batch",
-  "10",
+  "--max-attempts",
+  "1",
+  "--no-warmup",
   "--quiet",
 ]
 
 it("benchmark harness rejects fractional count options", async () => {
-  await expect(runBenchmarkSuite([], ["--rounds", "0.5"])).rejects.toThrow("--rounds must be an integer >= 2")
+  await expect(runBenchmarkSuite([], ["--iterations", "0.5"])).rejects.toThrow("--iterations must be an integer >= 2")
 })
 
 it("benchmark harness preserves measured operation errors", async () => {
@@ -37,8 +34,7 @@ it("benchmark harness preserves measured operation errors", async () => {
       validate: () => {},
       run: () => {
         calls += 1
-        if (calls > 3) throw new Error("measured failure")
-        return calls
+        throw new Error("measured failure")
       },
     }),
   }
@@ -68,11 +64,35 @@ it("benchmark harness rejects unknown exact scenarios", async () => {
   ).rejects.toThrow("Unknown benchmark scenarios: missing/scenario")
 })
 
-it("benchmark harness always enforces the calibrated batch cap", async () => {
+it("benchmark harness reports Tinybench statistics and timestamp provider", async () => {
   const jsonPath = join(tmpdir(), `bun-ffi-structs-benchmark-${process.pid}.json`)
   const successfulScenario: BenchmarkScenario = {
-    name: "harness/batch-cap",
-    description: "Synthetic harness batch cap check",
+    name: "harness/tinybench-statistics",
+    description: "Synthetic Tinybench result check",
+    category: "harness",
+    source: "library",
+    tier: "core",
+    setup: () => ({ validate: () => {}, run: () => ({ overriddenDuration: 123 }) }),
+  }
+
+  try {
+    await runBenchmarkSuite([successfulScenario], [...baseArgs, "--iterations", "2", "--json", jsonPath, "--overwrite"])
+    const payload = JSON.parse(readFileSync(jsonPath, "utf8"))
+    expect(payload.meta.engine).toBe("tinybench@6.0.2")
+    expect(payload.results[0].state).toBe("completed")
+    expect(payload.results[0].latency.samplesCount).toBeGreaterThanOrEqual(2)
+    expect(payload.results[0].latency.p50).toBeLessThan(1)
+    expect(payload.results[0].timestampProviderName).toBe("bunNanoseconds")
+  } finally {
+    rmSync(jsonPath, { force: true })
+  }
+})
+
+it("benchmark harness excludes Tinybench warmup from measured operation counts", async () => {
+  const jsonPath = join(tmpdir(), `bun-ffi-structs-benchmark-warmup-${process.pid}.json`)
+  const successfulScenario: BenchmarkScenario = {
+    name: "harness/warmup-accounting",
+    description: "Synthetic Tinybench warmup accounting check",
     category: "harness",
     source: "library",
     tier: "core",
@@ -82,11 +102,70 @@ it("benchmark harness always enforces the calibrated batch cap", async () => {
   try {
     await runBenchmarkSuite(
       [successfulScenario],
-      [...baseArgs, "--iterations", "11", "--json", jsonPath, "--overwrite"],
+      [
+        "--profile",
+        "quick",
+        "--time",
+        "1",
+        "--iterations",
+        "2",
+        "--warmup-time",
+        "1",
+        "--warmup-iterations",
+        "2",
+        "--quiet",
+        "--json",
+        jsonPath,
+        "--overwrite",
+      ],
     )
-    const payload = JSON.parse(readFileSync(jsonPath, "utf8"))
-    expect(payload.results[0].batchIterations).toBeLessThanOrEqual(10)
+    const result = JSON.parse(readFileSync(jsonPath, "utf8")).results[0]
+    expect(result.attemptedOperations).toBe(result.operations)
   } finally {
     rmSync(jsonPath, { force: true })
   }
+})
+
+it("benchmark harness does not retry or mask warmup failures in strict mode", async () => {
+  let setups = 0
+  const warmupFailure: BenchmarkScenario = {
+    name: "harness/warmup-failure",
+    description: "Synthetic Tinybench warmup failure check",
+    category: "harness",
+    source: "library",
+    tier: "core",
+    setup: () => {
+      setups += 1
+      const shouldFail = setups === 1
+      return {
+        validate: () => {},
+        run: () => {
+          if (shouldFail) throw new Error("warmup failure")
+        },
+      }
+    },
+  }
+
+  await expect(
+    runBenchmarkSuite(
+      [warmupFailure],
+      [
+        "--profile",
+        "quick",
+        "--time",
+        "1",
+        "--iterations",
+        "2",
+        "--warmup-time",
+        "1",
+        "--warmup-iterations",
+        "2",
+        "--max-attempts",
+        "2",
+        "--strict-rme",
+        "--quiet",
+      ],
+    ),
+  ).rejects.toThrow("Benchmark operation errors: harness/warmup-failure")
+  expect(setups).toBe(1)
 })

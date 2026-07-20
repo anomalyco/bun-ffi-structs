@@ -1,6 +1,7 @@
 import { cpus } from "node:os"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { dirname, isAbsolute, resolve } from "node:path"
+import { Bench, type Statistics, type Task } from "tinybench"
 
 export type BenchmarkTier = "core" | "extended" | "stress"
 
@@ -18,18 +19,31 @@ export interface BenchmarkScenario {
   name: string
   description: string
   category: string
-  source: "opentui" | "library"
+  source: "opentui" | "library" | "legacy"
   tier: BenchmarkTier
   setup(): BenchmarkRuntime
 }
 
-interface BenchmarkSample {
-  round: number
-  iterations: number
-  durationMs: number
-  nsPerOperation: number
-  opsPerSecond: number
-  errors: number
+interface StatisticsSummary {
+  aad: number
+  critical: number
+  df: number
+  mad: number
+  max: number
+  mean: number
+  min: number
+  moe: number
+  p50: number
+  p75: number
+  p99: number
+  p995: number
+  p999: number
+  rme: number
+  samplesCount: number
+  sd: number
+  sem: number
+  variance: number
+  samples?: readonly number[]
 }
 
 interface BenchmarkResult {
@@ -38,27 +52,31 @@ interface BenchmarkResult {
   category: string
   source: BenchmarkScenario["source"]
   tier: BenchmarkTier
-  batchIterations: number
+  state: "completed" | "errored"
   attempts: number
-  sampleDurationMs: number
-  totalOperations: number
+  timeMs: number
+  warmupTimeMs: number
+  operations: number
+  attemptedOperations: number
   workPerOperation: number
   workLabel: string
   bytesPerOperation: number
-  medianNsPerOperation: number
-  medianNsPerWorkItem: number
-  p95NsPerOperation: number
-  meanNsPerOperation: number
-  stdDevNsPerOperation: number
-  rmePercent: number
-  medianOpsPerSecond: number
-  medianWorkPerSecond: number
-  medianMiBPerSecond: number | null
+  latency?: StatisticsSummary
+  throughput?: StatisticsSummary
+  periodMs?: number
+  totalTimeMs?: number
+  medianNsPerOperation?: number
+  p99NsPerOperation?: number
+  medianNsPerWorkItem?: number
+  medianWorkPerSecond?: number
+  medianMiBPerSecond?: number | null
   errorCount: number
   errorRatePercent: number
   stable: boolean
   firstError?: string
-  samples: BenchmarkSample[]
+  runtime?: string
+  runtimeVersion?: string
+  timestampProviderName?: string
 }
 
 interface MemoryDelta {
@@ -90,18 +108,20 @@ interface MemoryResult {
 interface BenchmarkOptions {
   rawArgs: string[]
   profile: "quick" | "default" | "full"
-  initialIterations: number
+  timeMs: number
+  iterations: number
+  warmup: boolean
+  warmupTimeMs: number
   warmupIterations: number
-  rounds: number
-  minSampleMs: number
   maxRmePercent: number
   maxAttempts: number
-  maxBatchIterations: number
+  retainSamples: boolean
   filters: string[]
   exactScenarios: Set<string> | null
   listScenarios: boolean
   verbose: boolean
   output: boolean
+  strictRme: boolean
   allowUnstable: boolean
   jsonPath?: string
   overwriteJson: boolean
@@ -109,31 +129,40 @@ interface BenchmarkOptions {
   memoryTrials: number
 }
 
-const blackhole: { value: unknown; checksum: number } = { value: undefined, checksum: 0 }
+interface TinybenchAttempt {
+  task: Task
+  attemptedOperations: number
+  errorCount: number
+  firstError?: string
+  timeMs: number
+}
+
+const TINYBENCH_VERSION = "6.0.2"
+const benchmarkMarker = { checksum: 0 }
 let retainedMemoryOutputs: unknown[] | undefined
 
 const profileDefaults = {
   quick: {
-    initialIterations: 25,
-    warmupIterations: 25,
-    rounds: 3,
-    minSampleMs: 20,
+    timeMs: 20,
+    iterations: 64,
+    warmupTimeMs: 10,
+    warmupIterations: 16,
     maxRmePercent: 50,
     maxAttempts: 2,
   },
   default: {
-    initialIterations: 100,
-    warmupIterations: 100,
-    rounds: 5,
-    minSampleMs: 100,
+    timeMs: 100,
+    iterations: 64,
+    warmupTimeMs: 50,
+    warmupIterations: 32,
     maxRmePercent: 7.5,
     maxAttempts: 4,
   },
   full: {
-    initialIterations: 100,
-    warmupIterations: 200,
-    rounds: 7,
-    minSampleMs: 250,
+    timeMs: 250,
+    iterations: 64,
+    warmupTimeMs: 100,
+    warmupIterations: 64,
     maxRmePercent: 5,
     maxAttempts: 4,
   },
@@ -163,18 +192,20 @@ function readOption(args: string[], index: number, name: string): [string, numbe
 
 function parseArgs(args: string[]): BenchmarkOptions {
   let profile = (process.env.BENCH_PROFILE ?? "default") as BenchmarkOptions["profile"]
-  let initialIterations: number | undefined
+  let timeMs: number | undefined
+  let iterations: number | undefined
+  let warmup = true
+  let warmupTimeMs: number | undefined
   let warmupIterations: number | undefined
-  let rounds: number | undefined
-  let minSampleMs: number | undefined
   let maxRmePercent: number | undefined
   let maxAttempts: number | undefined
-  let maxBatchIterations = parsePositiveInteger(process.env.BENCH_MAX_BATCH, "BENCH_MAX_BATCH", 1_000_000)
+  let retainSamples = false
   let exactScenarios: Set<string> | null = null
   const filters: string[] = []
   let listScenarios = false
   let verbose = false
   let output = true
+  let strictRme = false
   let allowUnstable = false
   let jsonPath: string | undefined
   let overwriteJson = false
@@ -196,21 +227,21 @@ function parseArgs(args: string[]): BenchmarkOptions {
       const [value, next] = readOption(args, index, arg)
       profile = value as BenchmarkOptions["profile"]
       index = next
+    } else if (arg === "--time" || arg === "--min-sample-ms") {
+      const [value, next] = readOption(args, index, arg)
+      timeMs = parsePositiveNumber(value, arg, 1)
+      index = next
     } else if (arg === "--iterations") {
       const [value, next] = readOption(args, index, arg)
-      initialIterations = parsePositiveInteger(value, arg, 1)
+      iterations = parsePositiveInteger(value, arg, 2, 2)
       index = next
-    } else if (arg === "--warmup") {
+    } else if (arg === "--warmup-time") {
+      const [value, next] = readOption(args, index, arg)
+      warmupTimeMs = parsePositiveNumber(value, arg, 1)
+      index = next
+    } else if (arg === "--warmup-iterations" || arg === "--warmup") {
       const [value, next] = readOption(args, index, arg)
       warmupIterations = parsePositiveInteger(value, arg, 1)
-      index = next
-    } else if (arg === "--rounds") {
-      const [value, next] = readOption(args, index, arg)
-      rounds = parsePositiveInteger(value, arg, 2, 2)
-      index = next
-    } else if (arg === "--min-sample-ms") {
-      const [value, next] = readOption(args, index, arg)
-      minSampleMs = parsePositiveNumber(value, arg, 1)
       index = next
     } else if (arg === "--max-rme") {
       const [value, next] = readOption(args, index, arg)
@@ -219,10 +250,6 @@ function parseArgs(args: string[]): BenchmarkOptions {
     } else if (arg === "--max-attempts") {
       const [value, next] = readOption(args, index, arg)
       maxAttempts = parsePositiveInteger(value, arg, 1)
-      index = next
-    } else if (arg === "--max-batch") {
-      const [value, next] = readOption(args, index, arg)
-      maxBatchIterations = parsePositiveInteger(value, arg, 1)
       index = next
     } else if (arg === "--filter") {
       const [value, next] = readOption(args, index, arg)
@@ -250,12 +277,18 @@ function parseArgs(args: string[]): BenchmarkOptions {
       const [value, next] = readOption(args, index, arg)
       memoryTrials = parsePositiveInteger(value, arg, 1)
       index = next
+    } else if (arg === "--no-warmup") {
+      warmup = false
+    } else if (arg === "--retain-samples") {
+      retainSamples = true
     } else if (arg === "--list") {
       listScenarios = true
     } else if (arg === "--verbose") {
       verbose = true
     } else if (arg === "--quiet") {
       output = false
+    } else if (arg === "--strict-rme") {
+      strictRme = true
     } else if (arg === "--allow-unstable") {
       allowUnstable = true
     } else if (arg === "--overwrite") {
@@ -275,37 +308,26 @@ function parseArgs(args: string[]): BenchmarkOptions {
   return {
     rawArgs: [...args],
     profile,
-    initialIterations: initialIterations ?? defaults.initialIterations,
+    timeMs: timeMs ?? defaults.timeMs,
+    iterations: iterations ?? defaults.iterations,
+    warmup,
+    warmupTimeMs: warmupTimeMs ?? defaults.warmupTimeMs,
     warmupIterations: warmupIterations ?? defaults.warmupIterations,
-    rounds: rounds ?? defaults.rounds,
-    minSampleMs: minSampleMs ?? defaults.minSampleMs,
     maxRmePercent: maxRmePercent ?? defaults.maxRmePercent,
     maxAttempts: maxAttempts ?? defaults.maxAttempts,
-    maxBatchIterations,
+    retainSamples,
     filters,
     exactScenarios,
     listScenarios,
     verbose,
     output,
+    strictRme,
     allowUnstable,
     jsonPath,
     overwriteJson,
     memory,
     memoryTrials,
   }
-}
-
-function nowNs(): bigint {
-  return process.hrtime.bigint()
-}
-
-function nsToMs(value: bigint): number {
-  return Number(value) / 1_000_000
-}
-
-function mean(values: readonly number[]): number {
-  if (values.length === 0) return 0
-  return values.reduce((total, value) => total + value, 0) / values.length
 }
 
 function median(values: readonly number[]): number {
@@ -316,224 +338,190 @@ function median(values: readonly number[]): number {
   return ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2
 }
 
-function percentile(values: readonly number[], value: number): number {
-  if (values.length === 0) return 0
-  const sorted = [...values].sort((left, right) => left - right)
-  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil((value / 100) * sorted.length) - 1))
-  return sorted[index] ?? 0
-}
-
-function sampleStdDev(values: readonly number[]): number {
-  if (values.length <= 1) return 0
-  const average = mean(values)
-  return Math.sqrt(values.reduce((total, value) => total + (value - average) ** 2, 0) / (values.length - 1))
-}
-
-function tCritical95(degreesOfFreedom: number): number {
-  const table = [
-    12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.16, 2.145, 2.131, 2.12, 2.11,
-    2.101, 2.093, 2.086, 2.08, 2.074, 2.069, 2.064, 2.06, 2.056, 2.052, 2.048, 2.045, 2.042,
-  ]
-  if (degreesOfFreedom <= 0) return 0
-  return table[degreesOfFreedom - 1] ?? 1.96
-}
-
-function relativeMarginOfError(values: readonly number[]): number {
-  if (values.length <= 1) return 0
-  const average = mean(values)
-  if (average === 0) return 0
-  const standardError = sampleStdDev(values) / Math.sqrt(values.length)
-  return Math.abs((standardError * tCritical95(values.length - 1) * 100) / average)
-}
-
-function consume(value: unknown): void {
-  blackhole.value = value
-  let contribution = 1
-  if (typeof value === "number") contribution = value | 0
-  else if (typeof value === "bigint") contribution = Number(value & 0xffffffffn)
-  else if (typeof value === "string" || Array.isArray(value)) contribution = value.length
-  else if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) contribution = value.byteLength
-  else if (value instanceof Map || value instanceof Set) contribution = value.size
-  else if (typeof value === "boolean") contribution = value ? 1 : 0
-  else if (value === null || value === undefined) contribution = 0
-  blackhole.checksum = (blackhole.checksum + contribution) >>> 0
-}
-
-function roundIterations(value: number): number {
-  if (value <= 100) return Math.max(1, Math.ceil(value))
-  if (value <= 1_000) return Math.ceil(value / 10) * 10
-  if (value <= 10_000) return Math.ceil(value / 100) * 100
-  if (value <= 100_000) return Math.ceil(value / 1_000) * 1_000
-  return Math.ceil(value / 10_000) * 10_000
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
 }
 
-function runIterations(
-  runtime: BenchmarkRuntime,
-  count: number,
-  startIteration: number,
-  tolerateErrors: boolean,
-): { nextIteration: number; errors: number; firstError?: string } {
-  let errors = 0
-  let firstError: string | undefined
-  for (let iteration = 0; iteration < count; iteration += 1) {
-    try {
-      consume(runtime.run(startIteration + iteration))
-    } catch (error) {
-      errors += 1
-      firstError ??= errorMessage(error)
-      if (!tolerateErrors) throw error
-    }
-  }
-  return { nextIteration: startIteration + count, errors, firstError }
+function forceGC(): void {
+  Bun.gc(true)
+  Bun.gc(true)
 }
 
-function calibrate(runtime: BenchmarkRuntime, options: BenchmarkOptions, startIteration: number) {
-  const calibrationIterations = Math.min(options.initialIterations, options.maxBatchIterations)
-  const start = nowNs()
-  const run = runIterations(runtime, calibrationIterations, startIteration, false)
-  const durationMs = nsToMs(nowNs() - start)
-  let batchIterations = calibrationIterations
-  if (durationMs > 0 && durationMs < options.minSampleMs) {
-    batchIterations = Math.min(
-      options.maxBatchIterations,
-      roundIterations((batchIterations * options.minSampleMs) / durationMs),
-    )
+function summarizeStatistics(statistics: Statistics, retainSamples: boolean): StatisticsSummary {
+  return {
+    aad: statistics.aad,
+    critical: statistics.critical,
+    df: statistics.df,
+    mad: statistics.mad,
+    max: statistics.max,
+    mean: statistics.mean,
+    min: statistics.min,
+    moe: statistics.moe,
+    p50: statistics.p50,
+    p75: statistics.p75,
+    p99: statistics.p99,
+    p995: statistics.p995,
+    p999: statistics.p999,
+    rme: statistics.rme,
+    samplesCount: statistics.samplesCount,
+    sd: statistics.sd,
+    sem: statistics.sem,
+    variance: statistics.variance,
+    samples: retainSamples ? statistics.samples : undefined,
   }
-  return { batchIterations, nextIteration: run.nextIteration }
 }
 
-function runTimedAttempt(
-  runtime: BenchmarkRuntime,
-  options: BenchmarkOptions,
-  batchIterations: number,
-  startIteration: number,
-  sampleDurationMs: number,
-): { samples: BenchmarkSample[]; nextIteration: number; firstError?: string } {
-  const samples: BenchmarkSample[] = []
-  let nextIteration = startIteration
-  let firstError: string | undefined
-
-  for (let round = 0; round < options.rounds; round += 1) {
-    const start = nowNs()
-    let iterations = 0
-    let errors = 0
-    let durationMs = 0
-    do {
-      const run = runIterations(runtime, batchIterations, nextIteration, true)
-      nextIteration = run.nextIteration
-      iterations += batchIterations
-      errors += run.errors
-      firstError ??= run.firstError
-      durationMs = nsToMs(nowNs() - start)
-    } while (durationMs < sampleDurationMs)
-
-    samples.push({
-      round: round + 1,
-      iterations,
-      durationMs,
-      nsPerOperation: (durationMs * 1_000_000) / iterations,
-      opsPerSecond: (iterations * 1000) / durationMs,
-      errors,
-    })
-  }
-
-  return { samples, nextIteration, firstError }
-}
-
-function buildResult(
+function runTinybenchAttempt(
   scenario: BenchmarkScenario,
   runtime: BenchmarkRuntime,
-  samples: BenchmarkSample[],
-  batchIterations: number,
+  options: BenchmarkOptions,
+  timeMs: number,
+): TinybenchAttempt {
+  let attemptedOperations = 0
+  let errorCount = 0
+  let firstError: string | undefined
+  let iteration = 0
+  let mode: "warmup" | "run" = "warmup"
+
+  const bench = new Bench({
+    name: scenario.name,
+    time: timeMs,
+    iterations: options.iterations,
+    warmup: options.warmup,
+    warmupTime: options.warmupTimeMs,
+    warmupIterations: options.warmupIterations,
+    throws: true,
+    retainSamples: options.retainSamples,
+    concurrency: null,
+    timestampProvider: "bunNanoseconds",
+    setup: (_task, nextMode) => {
+      mode = nextMode ?? "run"
+      if (mode === "run") iteration = 0
+    },
+  })
+
+  bench.add(
+    scenario.name,
+    () => {
+      if (mode === "run") attemptedOperations += 1
+      try {
+        runtime.run(iteration)
+        iteration += 1
+      } catch (error) {
+        if (mode === "run") errorCount += 1
+        firstError ??= `${mode}: ${errorMessage(error)}`
+        throw error
+      }
+    },
+    { async: false },
+  )
+
+  try {
+    bench.runSync()
+  } catch (error) {
+    firstError ??= errorMessage(error)
+  }
+
+  return { task: bench.tasks[0]!, attemptedOperations, errorCount, firstError, timeMs }
+}
+
+function resultFromAttempt(
+  scenario: BenchmarkScenario,
+  runtime: BenchmarkRuntime,
+  attempt: TinybenchAttempt,
   attempts: number,
-  sampleDurationMs: number,
-  firstError: string | undefined,
-  maxRmePercent: number,
+  options: BenchmarkOptions,
 ): BenchmarkResult {
-  const nsPerOperation = samples.map((sample) => sample.nsPerOperation)
-  const opsPerSecond = samples.map((sample) => sample.opsPerSecond)
-  const totalOperations = samples.reduce((total, sample) => total + sample.iterations, 0)
-  const errorCount = samples.reduce((total, sample) => total + sample.errors, 0)
+  const taskResult = attempt.task.result
   const workPerOperation = runtime.workPerOperation ?? 1
   const bytesPerOperation = runtime.bytesPerOperation ?? 0
-  const medianOpsPerSecond = median(opsPerSecond)
-  const rmePercent = relativeMarginOfError(nsPerOperation)
+  const errorRatePercent =
+    attempt.attemptedOperations > 0 ? (attempt.errorCount * 100) / attempt.attemptedOperations : 0
 
+  if (taskResult.state !== "completed") {
+    return {
+      name: scenario.name,
+      description: scenario.description,
+      category: scenario.category,
+      source: scenario.source,
+      tier: scenario.tier,
+      state: "errored",
+      attempts,
+      timeMs: attempt.timeMs,
+      warmupTimeMs: options.warmupTimeMs,
+      operations: attempt.task.runs,
+      attemptedOperations: attempt.attemptedOperations,
+      workPerOperation,
+      workLabel: runtime.workLabel ?? "operations",
+      bytesPerOperation,
+      errorCount: attempt.errorCount,
+      errorRatePercent,
+      stable: false,
+      firstError:
+        attempt.firstError ?? (taskResult.state === "errored" ? errorMessage(taskResult.error) : taskResult.state),
+      runtime: taskResult.runtime,
+      runtimeVersion: taskResult.runtimeVersion,
+      timestampProviderName: String(taskResult.timestampProviderName),
+    }
+  }
+
+  const latency = summarizeStatistics(taskResult.latency, options.retainSamples)
+  const throughput = summarizeStatistics(taskResult.throughput, options.retainSamples)
+  const medianNsPerOperation = latency.p50 * 1_000_000
+  const medianOpsPerSecond = throughput.p50
   return {
     name: scenario.name,
     description: scenario.description,
     category: scenario.category,
     source: scenario.source,
     tier: scenario.tier,
-    batchIterations,
+    state: "completed",
     attempts,
-    sampleDurationMs,
-    totalOperations,
+    timeMs: attempt.timeMs,
+    warmupTimeMs: options.warmupTimeMs,
+    operations: attempt.task.runs,
+    attemptedOperations: attempt.attemptedOperations,
     workPerOperation,
     workLabel: runtime.workLabel ?? "operations",
     bytesPerOperation,
-    medianNsPerOperation: median(nsPerOperation),
-    medianNsPerWorkItem: median(nsPerOperation) / workPerOperation,
-    p95NsPerOperation: percentile(nsPerOperation, 95),
-    meanNsPerOperation: mean(nsPerOperation),
-    stdDevNsPerOperation: sampleStdDev(nsPerOperation),
-    rmePercent,
-    medianOpsPerSecond,
+    latency,
+    throughput,
+    periodMs: taskResult.period,
+    totalTimeMs: taskResult.totalTime,
+    medianNsPerOperation,
+    p99NsPerOperation: latency.p99 * 1_000_000,
+    medianNsPerWorkItem: medianNsPerOperation / workPerOperation,
     medianWorkPerSecond: medianOpsPerSecond * workPerOperation,
     medianMiBPerSecond: bytesPerOperation > 0 ? (medianOpsPerSecond * bytesPerOperation) / (1024 * 1024) : null,
-    errorCount,
-    errorRatePercent: totalOperations > 0 ? (errorCount * 100) / totalOperations : 0,
-    stable: errorCount === 0 && rmePercent <= maxRmePercent,
-    firstError,
-    samples,
+    errorCount: attempt.errorCount,
+    errorRatePercent,
+    stable: attempt.errorCount === 0 && latency.rme <= options.maxRmePercent,
+    firstError: attempt.firstError,
+    runtime: taskResult.runtime,
+    runtimeVersion: taskResult.runtimeVersion,
+    timestampProviderName: String(taskResult.timestampProviderName),
   }
 }
 
 function runScenario(scenario: BenchmarkScenario, options: BenchmarkOptions): BenchmarkResult {
-  const runtime = scenario.setup()
-  try {
-    runtime.validate()
-    let nextIteration = runIterations(runtime, options.warmupIterations, 0, false).nextIteration
-    const calibration = calibrate(runtime, options, nextIteration)
-    nextIteration = calibration.nextIteration
-    const batchIterations = calibration.batchIterations
-    if (batchIterations !== options.initialIterations) {
-      nextIteration = runIterations(
-        runtime,
-        Math.min(batchIterations, options.warmupIterations),
-        nextIteration,
-        false,
-      ).nextIteration
-    }
+  let result: BenchmarkResult | undefined
+  let timeMs = options.timeMs
+  benchmarkMarker.checksum = (benchmarkMarker.checksum + scenario.name.length) >>> 0
 
-    let sampleDurationMs = options.minSampleMs
-    let result: BenchmarkResult | undefined
-    for (let attempt = 1; attempt <= options.maxAttempts; attempt += 1) {
+  for (let attemptNumber = 1; attemptNumber <= options.maxAttempts; attemptNumber += 1) {
+    const runtime = scenario.setup()
+    try {
+      runtime.validate()
       forceGC()
-      const measured = runTimedAttempt(runtime, options, batchIterations, nextIteration, sampleDurationMs)
-      nextIteration = measured.nextIteration
-      result = buildResult(
-        scenario,
-        runtime,
-        measured.samples,
-        batchIterations,
-        attempt,
-        sampleDurationMs,
-        measured.firstError,
-        options.maxRmePercent,
-      )
-      if (result.errorCount > 0 || result.rmePercent <= options.maxRmePercent) break
-      sampleDurationMs *= 2
+      const attempt = runTinybenchAttempt(scenario, runtime, options, timeMs)
+      result = resultFromAttempt(scenario, runtime, attempt, attemptNumber, options)
+      if (result.state === "errored" || result.errorCount > 0 || result.stable || !options.strictRme) break
+      timeMs *= 2
+    } finally {
+      runtime.cleanup?.()
     }
-
-    return result!
-  } finally {
-    runtime.cleanup?.()
   }
+  return result!
 }
 
 function usageDelta(after: NodeJS.MemoryUsage, before: NodeJS.MemoryUsage): MemoryDelta {
@@ -576,11 +564,6 @@ function medianDelta(values: MemoryDelta[]): MemoryDelta {
   }
 }
 
-function forceGC(): void {
-  Bun.gc(true)
-  Bun.gc(true)
-}
-
 function defaultMemoryIterations(runtime: BenchmarkRuntime): number {
   if (runtime.memoryIterations) return runtime.memoryIterations
   const estimatedBytes = Math.max(128, runtime.bytesPerOperation ?? 128)
@@ -595,12 +578,12 @@ function runMemoryScenario(scenario: BenchmarkScenario, options: BenchmarkOption
 
   try {
     runtime.validate()
-    runIterations(runtime, Math.min(100, iterations), 0, false)
+    for (let index = 0; index < Math.min(100, iterations); index += 1) runtime.run(index)
 
     for (let trial = 0; trial < options.memoryTrials; trial += 1) {
       forceGC()
       const controlBefore = process.memoryUsage()
-      let control: unknown[] | undefined = new Array(iterations).fill(blackhole)
+      let control: unknown[] | undefined = new Array(iterations).fill(benchmarkMarker)
       retainedMemoryOutputs = control
       forceGC()
       const controlDelta = usageDelta(process.memoryUsage(), controlBefore)
@@ -626,12 +609,7 @@ function runMemoryScenario(scenario: BenchmarkScenario, options: BenchmarkOption
       forceGC()
       const residual = usageDelta(process.memoryUsage(), before)
       errorCount += errors
-      samples.push({
-        iterations,
-        retainedPerOperation: divideDelta(retained, iterations),
-        residual,
-        errors,
-      })
+      samples.push({ iterations, retainedPerOperation: divideDelta(retained, iterations), residual, errors })
     }
   } finally {
     retainedMemoryOutputs = undefined
@@ -681,34 +659,42 @@ function printTable(header: string[], rows: string[][]): void {
 
 function printResults(results: BenchmarkResult[], options: BenchmarkOptions): void {
   console.log(
-    `bun-ffi-structs profile=${options.profile} rounds=${options.rounds} min_sample_ms=${options.minSampleMs} max_rme=${options.maxRmePercent}% scenarios=${results.length} checksum=${blackhole.checksum}`,
+    `bun-ffi-structs engine=tinybench@${TINYBENCH_VERSION} profile=${options.profile} time_ms=${options.timeMs} warmup_ms=${options.warmup ? options.warmupTimeMs : 0} max_rme=${options.maxRmePercent}% scenarios=${results.length} checksum=${benchmarkMarker.checksum}`,
   )
   console.log("")
   printTable(
-    ["scenario", "source", "batch", "median ns/op", "ns/item", "p95 ns/op", "rme %", "error %", "work/s", "MiB/s"],
+    [
+      "scenario",
+      "source",
+      "samples",
+      "median ns/op",
+      "ns/item",
+      "p99 ns/op",
+      "mean rme %",
+      "error %",
+      "work/s",
+      "MiB/s",
+    ],
     results.map((result) => [
       result.name,
       result.source,
-      String(result.batchIterations),
-      formatNumber(result.medianNsPerOperation),
-      formatNumber(result.medianNsPerWorkItem),
-      formatNumber(result.p95NsPerOperation),
-      formatNumber(result.rmePercent),
+      String(result.latency?.samplesCount ?? 0),
+      result.medianNsPerOperation === undefined ? "-" : formatNumber(result.medianNsPerOperation),
+      result.medianNsPerWorkItem === undefined ? "-" : formatNumber(result.medianNsPerWorkItem),
+      result.p99NsPerOperation === undefined ? "-" : formatNumber(result.p99NsPerOperation),
+      result.latency === undefined ? "-" : formatNumber(result.latency.rme),
       formatNumber(result.errorRatePercent),
-      formatNumber(result.medianWorkPerSecond),
-      result.medianMiBPerSecond === null ? "-" : formatNumber(result.medianMiBPerSecond),
+      result.medianWorkPerSecond === undefined ? "-" : formatNumber(result.medianWorkPerSecond),
+      result.medianMiBPerSecond == null ? "-" : formatNumber(result.medianMiBPerSecond),
     ]),
   )
 
   if (options.verbose) {
     console.log("")
     for (const result of results) {
-      console.log(`${result.name}: ${result.description}`)
-      for (const sample of result.samples) {
-        console.log(
-          `  round=${sample.round} iterations=${sample.iterations} duration_ms=${formatNumber(sample.durationMs)} ns_op=${formatNumber(sample.nsPerOperation)} errors=${sample.errors}`,
-        )
-      }
+      console.log(
+        `${result.name}: ${result.description}\n  state=${result.state} attempts=${result.attempts} operations=${result.operations} attempted=${result.attemptedOperations} latency_mean_ns=${formatNumber((result.latency?.mean ?? 0) * 1_000_000)} latency_sd_ns=${formatNumber((result.latency?.sd ?? 0) * 1_000_000)} latency_sem_ns=${formatNumber((result.latency?.sem ?? 0) * 1_000_000)} moe_ns=${formatNumber((result.latency?.moe ?? 0) * 1_000_000)} critical=${formatNumber(result.latency?.critical ?? 0)}${result.firstError ? ` error=${result.firstError}` : ""}`,
+      )
     }
   }
 }
@@ -764,16 +750,24 @@ function writeJson(
       {
         meta: {
           timestamp: new Date().toISOString(),
+          engine: `tinybench@${TINYBENCH_VERSION}`,
           cwd: process.cwd(),
           args: options.rawArgs,
           profile: options.profile,
-          initialIterations: options.initialIterations,
+          timeMs: options.timeMs,
+          iterations: options.iterations,
+          warmup: options.warmup,
+          warmupTimeMs: options.warmupTimeMs,
           warmupIterations: options.warmupIterations,
-          rounds: options.rounds,
-          minSampleMs: options.minSampleMs,
           maxRmePercent: options.maxRmePercent,
           maxAttempts: options.maxAttempts,
-          maxBatchIterations: options.maxBatchIterations,
+          strictRme: options.strictRme,
+          retainSamples: options.retainSamples,
+          statisticsUnits: {
+            latency: "milliseconds",
+            throughput: "operations/second",
+            derivedLatency: "nanoseconds",
+          },
           runtime: {
             bun: Bun.version,
             node: process.versions.node,
@@ -783,7 +777,7 @@ function writeJson(
           },
           cpu: { model: cpu?.model, speedMHz: cpu?.speed, logicalCpus: cpus().length },
           commit: process.env.GITHUB_SHA ?? process.env.BENCH_COMMIT,
-          blackholeChecksum: blackhole.checksum,
+          scenarioChecksum: benchmarkMarker.checksum,
         },
         results,
         memoryResults,
@@ -799,13 +793,13 @@ export async function runBenchmarkSuite(
   args: string[] = process.argv.slice(2),
 ): Promise<void> {
   const options = parseArgs(args)
+  benchmarkMarker.checksum = 0
   if (options.listScenarios) {
     for (const scenario of scenarios) {
       console.log(`${scenario.name}\t${scenario.tier}\t${scenario.source}\t${scenario.description}`)
     }
     return
   }
-
   if (options.exactScenarios) {
     const available = new Set(scenarios.map((scenario) => scenario.name))
     const missing = [...options.exactScenarios].filter((name) => !available.has(name))
@@ -828,7 +822,9 @@ export async function runBenchmarkSuite(
     results.push(result)
     if (options.output) {
       console.log(
-        `${formatNumber(result.medianNsPerOperation)} ns/op rme=${formatNumber(result.rmePercent)}% errors=${result.errorCount}`,
+        result.state === "completed"
+          ? `${formatNumber(result.medianNsPerOperation!)} ns/op rme=${formatNumber(result.latency!.rme)}% errors=${result.errorCount}`
+          : `errored error_rate=${formatNumber(result.errorRatePercent)}% ${result.firstError ?? ""}`,
       )
     }
   }
@@ -838,17 +834,17 @@ export async function runBenchmarkSuite(
   if (options.output && memoryResults.length > 0) printMemoryResults(memoryResults)
   if (options.jsonPath) writeJson(options.jsonPath, options, results, memoryResults)
 
-  const failed = results.filter((result) => result.errorCount > 0)
-  const unstable = results.filter((result) => result.errorCount === 0 && !result.stable)
+  const failed = results.filter((result) => result.errorCount > 0 || result.state === "errored")
+  const unstable = results.filter((result) => result.state === "completed" && result.errorCount === 0 && !result.stable)
   const memoryFailed = memoryResults.filter((result) => result.errorCount > 0)
   if (failed.length > 0 || memoryFailed.length > 0) {
     throw new Error(
       `Benchmark operation errors: ${[...failed, ...memoryFailed].map((result) => result.name).join(", ")}`,
     )
   }
-  if (unstable.length > 0 && !options.allowUnstable) {
+  if (unstable.length > 0 && options.strictRme && !options.allowUnstable) {
     throw new Error(
-      `Unstable benchmark results exceeded ${options.maxRmePercent}% RME after retries: ${unstable.map((result) => `${result.name} (${formatNumber(result.rmePercent)}%)`).join(", ")}`,
+      `Unstable benchmark results exceeded ${options.maxRmePercent}% Tinybench latency RME after retries: ${unstable.map((result) => `${result.name} (${formatNumber(result.latency!.rme)}%)`).join(", ")}`,
     )
   }
 }

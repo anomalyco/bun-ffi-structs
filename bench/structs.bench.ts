@@ -143,6 +143,51 @@ function unpackListScenario(options: {
   }))
 }
 
+function roundtripScenario(options: {
+  name: string
+  description: string
+  category: string
+  source: BenchmarkScenario["source"]
+  tier: BenchmarkTier
+  struct: AnyStruct
+  value: unknown
+  bytes?: number
+  memoryIterations?: number
+  validate: (value: any) => void
+}): BenchmarkScenario {
+  return scenario(options.name, options.description, options.category, options.source, options.tier, () => ({
+    run: () => options.struct.unpack(options.struct.pack(options.value as any)),
+    validate: () => options.validate(options.struct.unpack(options.struct.pack(options.value as any))),
+    bytesPerOperation: options.bytes ?? options.struct.size,
+    memoryIterations: options.memoryIterations,
+  }))
+}
+
+function roundtripListScenario(options: {
+  name: string
+  description: string
+  category: string
+  source: BenchmarkScenario["source"]
+  tier: BenchmarkTier
+  struct: AnyStruct
+  values: unknown[]
+  bytes?: number
+  memoryIterations?: number
+  validate: (values: any[]) => void
+}): BenchmarkScenario {
+  return scenario(options.name, options.description, options.category, options.source, options.tier, () => ({
+    run: () => options.struct.unpackList(options.struct.packList(options.values as any[]), options.values.length),
+    validate: () =>
+      options.validate(
+        options.struct.unpackList(options.struct.packList(options.values as any[]), options.values.length),
+      ),
+    workPerOperation: options.values.length,
+    workLabel: "structs",
+    bytesPerOperation: options.bytes ?? options.struct.size * options.values.length,
+    memoryIterations: options.memoryIterations,
+  }))
+}
+
 // OpenTUI production definitions, mirrored from packages/core/src/zig-structs.ts.
 type BenchColor = { buffer: Uint16Array }
 type StyledChunkInput = {
@@ -461,6 +506,124 @@ const SmallEnum = defineEnum({ idle: 0, active: 1, done: 2 }, "u8")
 const EnumArrayStruct = defineStruct([
   ["count", "u32", { lengthOf: "values" }],
   ["values", [SmallEnum]],
+])
+
+// Exact schemas and fixtures from the benchmark suite that preceded the OpenTUI expansion.
+const LegacySimpleStruct = defineStruct([
+  ["id", "u32"],
+  ["value", "f64"],
+  ["active", "bool_u8"],
+])
+const LegacyMediumStruct = defineStruct([
+  ["id", "u32"],
+  ["x", "f32"],
+  ["y", "f32"],
+  ["z", "f32"],
+  ["timestamp", "u64"],
+  ["flags", "u32"],
+  ["enabled", "bool_u32"],
+  ["score", "f64"],
+])
+const LegacyStatusEnum = defineEnum({ Active: 0, Inactive: 1, Pending: 2, Completed: 3 })
+const LegacyNestedStruct = defineStruct([
+  ["inner", LegacySimpleStruct],
+  ["status", LegacyStatusEnum],
+  ["count", "u32"],
+])
+const LegacyComplexNestedStruct = defineStruct([
+  ["header", LegacyMediumStruct],
+  ["nested", LegacyNestedStruct],
+  ["footer_id", "u32"],
+  ["footer_value", "f64"],
+])
+const LegacyArrayStruct = defineStruct([
+  ["count", "u32", { lengthOf: "items" }],
+  ["items", ["u32"]],
+])
+const LegacyLargeArrayStruct = defineStruct([
+  ["id", "u32"],
+  ["data_len", "u32", { lengthOf: "data" }],
+  ["data", ["f32"]],
+  ["indices_len", "u32", { lengthOf: "indices" }],
+  ["indices", ["u32"]],
+])
+const LegacyMassiveNestedStruct = defineStruct([
+  ["level1", LegacyComplexNestedStruct],
+  ["level2", LegacyComplexNestedStruct],
+  ["level3", LegacyComplexNestedStruct],
+  ["counter", "u64"],
+  ["metadata", LegacyMediumStruct],
+])
+
+const legacySimpleData = { id: 42, value: 3.14159, active: true }
+const legacyMediumData = {
+  id: 100,
+  x: 1.5,
+  y: 2.5,
+  z: 3.5,
+  timestamp: 1234567890n,
+  flags: 0xff00ff00,
+  enabled: true,
+  score: 99.99,
+}
+const legacyNestedData = { inner: legacySimpleData, status: "Active" as const, count: 10 }
+const legacyComplexNestedData = {
+  header: legacyMediumData,
+  nested: legacyNestedData,
+  footer_id: 999,
+  footer_value: 123.456,
+}
+const legacyMassiveNestedData = {
+  level1: legacyComplexNestedData,
+  level2: legacyComplexNestedData,
+  level3: legacyComplexNestedData,
+  counter: 9999999999n,
+  metadata: legacyMediumData,
+}
+
+const legacyArrayData = new Map(
+  [10, 100, 1000, 10_000].map((count) => [count, { count, items: Array.from({ length: count }, (_, index) => index) }]),
+)
+const legacyLargeArrayData = {
+  medium: {
+    id: 42,
+    data_len: 1000,
+    data: Array.from({ length: 1000 }, (_, index) => index * 0.5),
+    indices_len: 500,
+    indices: Array.from({ length: 500 }, (_, index) => index * 2),
+  },
+  huge: {
+    id: 42,
+    data_len: 10_000,
+    data: Array.from({ length: 10_000 }, (_, index) => index * 0.5),
+    indices_len: 5000,
+    indices: Array.from({ length: 5000 }, (_, index) => index * 2),
+  },
+}
+const legacySimpleLists = new Map(
+  [10, 100, 1000, 10_000].map((count) => [
+    count,
+    Array.from({ length: count }, (_, index) => ({ id: index, value: index * 1.5, active: index % 2 === 0 })),
+  ]),
+)
+const legacyMediumLists = new Map(
+  [10, 1000].map((count) => [
+    count,
+    Array.from({ length: count }, (_, index) => ({
+      id: index,
+      x: index,
+      y: index * 2,
+      z: index * 3,
+      timestamp: BigInt(index * 1000),
+      flags: index,
+      enabled: index % 2 === 0,
+      score: index * 10.5,
+    })),
+  ]),
+)
+const legacyComplexLists = new Map([
+  [10, Array.from({ length: 10 }, () => legacyComplexNestedData)],
+  [100, Array.from({ length: 100 }, () => legacyComplexNestedData)],
 ])
 
 const red: BenchColor = { buffer: new Uint16Array([65535, 0, 0, 65535]) }
@@ -1357,5 +1520,234 @@ scenarios.push(
     },
   ),
 )
+
+const legacySingleStructs = [
+  {
+    id: "simple-struct",
+    oldName: "SimpleStruct",
+    struct: LegacySimpleStruct,
+    value: legacySimpleData,
+    memoryIterations: 50_000,
+    validate: (value: any) => assertEqual(value.id, 42, "legacy simple id"),
+  },
+  {
+    id: "medium-struct",
+    oldName: "MediumStruct",
+    struct: LegacyMediumStruct,
+    value: legacyMediumData,
+    memoryIterations: 50_000,
+    validate: (value: any) => assertEqual(value.score, 99.99, "legacy medium score"),
+  },
+  {
+    id: "nested-struct",
+    oldName: "NestedStruct",
+    struct: LegacyNestedStruct,
+    value: legacyNestedData,
+    memoryIterations: 25_000,
+    validate: (value: any) => assertEqual(value.status, "Active", "legacy nested status"),
+  },
+  {
+    id: "complex-nested-struct",
+    oldName: "ComplexNestedStruct",
+    struct: LegacyComplexNestedStruct,
+    value: legacyComplexNestedData,
+    memoryIterations: 20_000,
+    validate: (value: any) => assertEqual(value.footer_id, 999, "legacy complex footer id"),
+  },
+  {
+    id: "massive-nested-struct",
+    oldName: "MassiveNestedStruct",
+    struct: LegacyMassiveNestedStruct,
+    value: legacyMassiveNestedData,
+    memoryIterations: 10_000,
+    validate: (value: any) => assertEqual(value.counter, 9999999999n, "legacy massive counter"),
+  },
+]
+
+for (const legacy of legacySingleStructs) {
+  const buffer = legacy.struct.pack(legacy.value as any)
+  scenarios.push(
+    packScenario({
+      name: `legacy/${legacy.id}/pack`,
+      description: `Exact pre-expansion '${legacy.oldName} pack' schema and fixture`,
+      category: "legacy",
+      source: "legacy",
+      tier: "extended",
+      struct: legacy.struct,
+      value: legacy.value,
+      memoryIterations: legacy.memoryIterations,
+    }),
+    unpackScenario({
+      name: `legacy/${legacy.id}/unpack-only`,
+      description: `Corrected unpack-only measurement for the pre-expansion ${legacy.oldName} fixture`,
+      category: "legacy",
+      source: "legacy",
+      tier: "extended",
+      struct: legacy.struct,
+      buffer,
+      memoryIterations: legacy.memoryIterations,
+      validate: legacy.validate,
+    }),
+    roundtripScenario({
+      name: `legacy/${legacy.id}/roundtrip`,
+      description: `Historical '${legacy.oldName} unpack' callback semantics: pack then unpack inside timing`,
+      category: "legacy",
+      source: "legacy",
+      tier: "extended",
+      struct: legacy.struct,
+      value: legacy.value,
+      memoryIterations: legacy.memoryIterations,
+      validate: legacy.validate,
+    }),
+  )
+}
+
+const legacyArrayMemoryIterations = new Map([
+  [10, 20_000],
+  [100, 10_000],
+  [1000, 1_000],
+  [10_000, 100],
+])
+for (const [count, value] of legacyArrayData) {
+  scenarios.push(
+    packScenario({
+      name: `legacy/array-struct/pack/${count}`,
+      description: `Exact pre-expansion 'ArrayStruct pack (${count} items)' schema and fixture`,
+      category: "legacy",
+      source: "legacy",
+      tier: "extended",
+      struct: LegacyArrayStruct,
+      value,
+      bytes: LegacyArrayStruct.size + count * 4,
+      workPerOperation: count,
+      workLabel: "elements",
+      memoryIterations: legacyArrayMemoryIterations.get(count),
+      validate: (buffer) => assertArraySample(LegacyArrayStruct.unpack(buffer).items, value.items, "legacy array"),
+    }),
+  )
+}
+
+for (const [id, value, memoryIterations] of [
+  ["1000-f32-500-u32", legacyLargeArrayData.medium, 1_000],
+  ["10000-f32-5000-u32", legacyLargeArrayData.huge, 100],
+] as const) {
+  scenarios.push(
+    packScenario({
+      name: `legacy/large-array-struct/pack/${id}`,
+      description: `Exact pre-expansion two-array LargeArrayStruct pack (${id})`,
+      category: "legacy",
+      source: "legacy",
+      tier: "extended",
+      struct: LegacyLargeArrayStruct,
+      value,
+      bytes: LegacyLargeArrayStruct.size + value.data.length * 4 + value.indices.length * 4,
+      workPerOperation: value.data.length + value.indices.length,
+      workLabel: "elements",
+      memoryIterations,
+      validate: (buffer) => {
+        const output = LegacyLargeArrayStruct.unpack(buffer)
+        assertArraySample(output.data, value.data, "legacy large data")
+        assertArraySample(output.indices, value.indices, "legacy large indices")
+      },
+    }),
+  )
+}
+
+function addLegacyListScenarios(options: {
+  id: string
+  oldName: string
+  struct: AnyStruct
+  values: any[]
+  memoryIterations: number
+  validate: (values: any[]) => void
+}): void {
+  const count = options.values.length
+  const buffer = options.struct.packList(options.values)
+  const bytes = options.struct.size * count
+  scenarios.push(
+    packListScenario({
+      name: `legacy/${options.id}/pack/${count}`,
+      description: `Exact pre-expansion '${options.oldName} packList (${count} items)' schema and fixture`,
+      category: "legacy",
+      source: "legacy",
+      tier: "extended",
+      struct: options.struct,
+      values: options.values,
+      bytes,
+      memoryIterations: options.memoryIterations,
+    }),
+    unpackListScenario({
+      name: `legacy/${options.id}/unpack-only/${count}`,
+      description: `Corrected unpack-only measurement for the pre-expansion ${options.oldName} ${count}-item list`,
+      category: "legacy",
+      source: "legacy",
+      tier: "extended",
+      struct: options.struct,
+      buffer,
+      count,
+      memoryIterations: options.memoryIterations,
+      validate: options.validate,
+    }),
+    roundtripListScenario({
+      name: `legacy/${options.id}/roundtrip/${count}`,
+      description: `Historical '${options.oldName} unpackList (${count} items)' callback semantics: packList then unpackList`,
+      category: "legacy",
+      source: "legacy",
+      tier: "extended",
+      struct: options.struct,
+      values: options.values,
+      bytes,
+      memoryIterations: options.memoryIterations,
+      validate: options.validate,
+    }),
+  )
+}
+
+const legacySimpleListMemory = new Map([
+  [10, 20_000],
+  [100, 5_000],
+  [1000, 500],
+  [10_000, 50],
+])
+for (const [count, values] of legacySimpleLists) {
+  addLegacyListScenarios({
+    id: "simple-struct-list",
+    oldName: "SimpleStruct",
+    struct: LegacySimpleStruct,
+    values,
+    memoryIterations: legacySimpleListMemory.get(count)!,
+    validate: (output) => assertEqual(output[count - 1]?.id, count - 1, "legacy simple-list last id"),
+  })
+}
+
+const legacyMediumListMemory = new Map([
+  [10, 20_000],
+  [1000, 250],
+])
+for (const [count, values] of legacyMediumLists) {
+  addLegacyListScenarios({
+    id: "medium-struct-list",
+    oldName: "MediumStruct",
+    struct: LegacyMediumStruct,
+    values,
+    memoryIterations: legacyMediumListMemory.get(count)!,
+    validate: (output) => assertEqual(output[count - 1]?.id, count - 1, "legacy medium-list last id"),
+  })
+}
+
+const legacyComplexListMemory = new Map([
+  [10, 5_000],
+  [100, 500],
+])
+for (const [count, values] of legacyComplexLists) {
+  addLegacyListScenarios({
+    id: "complex-nested-struct-list",
+    oldName: "ComplexNestedStruct",
+    struct: LegacyComplexNestedStruct,
+    values,
+    memoryIterations: legacyComplexListMemory.get(count)!,
+    validate: (output) => assertEqual(output[count - 1]?.footer_id, 999, "legacy complex-list footer id"),
+  })
+}
 
 if (import.meta.main) await runBenchmarkSuite(scenarios)
