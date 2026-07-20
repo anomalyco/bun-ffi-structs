@@ -82,7 +82,6 @@ export function allocStruct(structDef: StructDef<any, any>, options?: AllocStruc
   const buffer = new ArrayBuffer(structDef.size)
   const view = new DataView(buffer)
   const result: AllocStructResult = { buffer, view }
-  const { pack: pointerPacker } = primitivePackers("pointer")
 
   if (options?.lengths) {
     const subBuffers: Record<string, ArrayBuffer> = {}
@@ -186,6 +185,42 @@ interface StructLayoutField {
 
 function isStruct(type: any): type is StructDef<any> {
   return typeof type === "object" && type.__type === "struct"
+}
+
+interface StructInternals {
+  layout: StructLayoutField[]
+  options?: StructDefOptions
+  publicPack: StructDef<any, any>["pack"]
+  materializeArrayIterables(obj: any): any
+}
+
+const structInternals = new WeakMap<StructDef<any, any>, StructInternals>()
+const freshPackBuffers = new WeakSet<ArrayBufferLike>()
+
+function packInlineStruct(
+  internals: StructInternals,
+  view: DataView,
+  obj: any,
+  options?: StructFieldPackOptions,
+): void {
+  let mappedObj = internals.options?.mapValue ? internals.options.mapValue(obj) : obj
+  mappedObj = internals.materializeArrayIterables(mappedObj)
+
+  for (const field of internals.layout) {
+    const value = mappedObj[field.name] ?? field.default
+    if (!field.optional && value === undefined) {
+      fatalError(`Packing non-optional field '${field.name}' but value is undefined (and no default provided)`)
+    }
+    if (field.validate) {
+      for (const validateFn of field.validate) {
+        validateFn(value, field.name, {
+          hints: options?.validationHints,
+          input: mappedObj,
+        })
+      }
+    }
+    field.pack(view, field.offset, value, mappedObj, options)
+  }
 }
 
 function primitivePackers(type: PrimitiveType) {
@@ -311,6 +346,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
 ): DefineStructReturnType<Fields, Opts> {
   let offset = 0
   let maxAlign = 1
+  let hasDirectInlinePack = false
   const layout: StructLayoutField[] = []
   const lengthOfFields: Record<string, StructLayoutField> = {}
   const lengthOfRequested: {
@@ -435,8 +471,18 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         // Inline struct
         size = typeOrStruct.size
         align = typeOrStruct.align
-        pack = (view, off, val, obj, options) => {
-          const nestedBuf = typeOrStruct.pack(val, options)
+        const internals = structInternals.get(typeOrStruct)
+        hasDirectInlinePack ||= !!internals && !options.optional
+        pack = (view, off, val, obj, packOptions) => {
+          const publicPack = typeOrStruct.pack
+          if (internals && freshPackBuffers.has(view.buffer) && publicPack === internals.publicPack) {
+            const nestedView = new DataView(view.buffer, view.byteOffset + off, size)
+            new Uint8Array(nestedView.buffer, nestedView.byteOffset, size).fill(0)
+            packInlineStruct(internals, nestedView, val, packOptions)
+            return
+          }
+
+          const nestedBuf = Reflect.apply(publicPack, typeOrStruct, [val, packOptions])
           const nestedView = new Uint8Array(nestedBuf)
           const dView = new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
           dView.set(nestedView, off)
@@ -796,7 +842,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     return normalized
   }
 
-  return {
+  const definition = {
     __type: "struct",
     size: totalSize,
     align: maxAlign,
@@ -813,21 +859,26 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         mappedObj = structDefOptions.mapValue(obj)
       }
       mappedObj = materializeArrayIterables(mappedObj)
+      if (hasDirectInlinePack) freshPackBuffers.add(buf)
 
-      for (const field of layout) {
-        const value = (mappedObj as any)[field.name] ?? field.default
-        if (!field.optional && value === undefined) {
-          fatalError(`Packing non-optional field '${field.name}' but value is undefined (and no default provided)`)
-        }
-        if (field.validate) {
-          for (const validateFn of field.validate) {
-            validateFn(value, field.name, {
-              hints: options?.validationHints,
-              input: mappedObj,
-            })
+      try {
+        for (const field of layout) {
+          const value = (mappedObj as any)[field.name] ?? field.default
+          if (!field.optional && value === undefined) {
+            fatalError(`Packing non-optional field '${field.name}' but value is undefined (and no default provided)`)
           }
+          if (field.validate) {
+            for (const validateFn of field.validate) {
+              validateFn(value, field.name, {
+                hints: options?.validationHints,
+                input: mappedObj,
+              })
+            }
+          }
+          field.pack(view, field.offset, value, mappedObj, options)
         }
-        field.pack(view, field.offset, value, mappedObj, options)
+      } finally {
+        if (hasDirectInlinePack) freshPackBuffers.delete(buf)
       }
       return view.buffer
     },
@@ -904,31 +955,36 @@ export function defineStruct<const Fields extends readonly StructField[], const 
 
       const buffer = new ArrayBuffer(totalSize * objects.length)
       const view = new DataView(buffer)
+      if (hasDirectInlinePack) freshPackBuffers.add(buffer)
 
-      for (let i = 0; i < objects.length; i++) {
-        let mappedObj: any = objects[i]
-        if (structDefOptions?.mapValue) {
-          mappedObj = structDefOptions.mapValue(objects[i])
-        }
-        mappedObj = materializeArrayIterables(mappedObj)
-
-        for (const field of layout) {
-          const value = (mappedObj as any)[field.name] ?? field.default
-          if (!field.optional && value === undefined) {
-            fatalError(
-              `Packing non-optional field '${field.name}' at index ${i} but value is undefined (and no default provided)`,
-            )
+      try {
+        for (let i = 0; i < objects.length; i++) {
+          let mappedObj: any = objects[i]
+          if (structDefOptions?.mapValue) {
+            mappedObj = structDefOptions.mapValue(objects[i])
           }
-          if (field.validate) {
-            for (const validateFn of field.validate) {
-              validateFn(value, field.name, {
-                hints: options?.validationHints,
-                input: mappedObj,
-              })
+          mappedObj = materializeArrayIterables(mappedObj)
+
+          for (const field of layout) {
+            const value = (mappedObj as any)[field.name] ?? field.default
+            if (!field.optional && value === undefined) {
+              fatalError(
+                `Packing non-optional field '${field.name}' at index ${i} but value is undefined (and no default provided)`,
+              )
             }
+            if (field.validate) {
+              for (const validateFn of field.validate) {
+                validateFn(value, field.name, {
+                  hints: options?.validationHints,
+                  input: mappedObj,
+                })
+              }
+            }
+            field.pack(view, i * totalSize + field.offset, value, mappedObj, options)
           }
-          field.pack(view, i * totalSize + field.offset, value, mappedObj, options)
         }
+      } finally {
+        if (hasDirectInlinePack) freshPackBuffers.delete(buffer)
       }
 
       return buffer
@@ -985,4 +1041,12 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       return description
     },
   } as DefineStructReturnType<Fields, Opts>
+
+  structInternals.set(definition, {
+    layout,
+    options: structDefOptions,
+    publicPack: definition.pack,
+    materializeArrayIterables,
+  })
+  return definition
 }

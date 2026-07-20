@@ -82,6 +82,87 @@ describe("behavior coverage", () => {
     expect(TestStruct.unpack(buffer).value).toBe(0)
   })
 
+  it("preserves strict and zero-filled semantics for inline nested structs", () => {
+    const InnerStruct = defineStruct([
+      ["required", "u8"],
+      ["optional", "u32", { optional: true }],
+    ] as const)
+    const OuterStruct = defineStruct([
+      ["prefix", "u8"],
+      ["inner", InnerStruct],
+    ] as const)
+    const buffer = new ArrayBuffer(OuterStruct.size)
+    new Uint8Array(buffer).fill(0xff)
+
+    OuterStruct.packInto({ prefix: 1, inner: { required: 2 } }, new DataView(buffer), 0)
+
+    const innerOffset = OuterStruct.layoutByName.get("inner")!.offset
+    expect([...new Uint8Array(buffer, innerOffset, InnerStruct.size)]).toEqual([2, 0, 0, 0, 0, 0, 0, 0])
+    expect(OuterStruct.unpack(buffer).inner).toEqual({ required: 2, optional: 0 })
+    expect(() => OuterStruct.pack({ prefix: 1, inner: {} } as any)).toThrow(
+      "Packing non-optional field 'required' but value is undefined",
+    )
+  })
+
+  it("preserves nested getter, override, and failed packInto behavior", () => {
+    const InnerStruct = defineStruct([["value", "u32"]] as const)
+    const OptionalOuterStruct = defineStruct([["inner", InnerStruct, { optional: true }]] as const)
+    let getterCalls = 0
+    const getterInput = Object.defineProperty({}, "inner", {
+      enumerable: true,
+      get() {
+        getterCalls += 1
+        return { value: 7 }
+      },
+    })
+    expect(OptionalOuterStruct.unpack(OptionalOuterStruct.pack(getterInput as any)).inner?.value).toBe(7)
+    expect(getterCalls).toBe(1)
+
+    const RequiredOuterStruct = defineStruct([["inner", InnerStruct]] as const)
+    const originalPack = InnerStruct.pack
+    let packGetterCalls = 0
+    let overrideCalls = 0
+    Object.defineProperty(InnerStruct, "pack", {
+      configurable: true,
+      get() {
+        packGetterCalls += 1
+        const override = function (this: typeof InnerStruct, value: { value: number }, options?: any) {
+          overrideCalls += 1
+          return originalPack.call(this, value, options)
+        }
+        Object.defineProperty(override, "call", {
+          value: () => {
+            throw new Error("shadowed call must not be used")
+          },
+        })
+        return override
+      },
+    })
+    expect(RequiredOuterStruct.pack({ inner: { value: 8 } }).byteLength).toBe(RequiredOuterStruct.size)
+    expect(packGetterCalls).toBe(1)
+    expect(overrideCalls).toBe(1)
+
+    const FailingInnerStruct = defineStruct([
+      ["first", "u32"],
+      [
+        "second",
+        "u32",
+        {
+          validate: () => {
+            throw new Error("nested validation failed")
+          },
+        },
+      ],
+    ] as const)
+    const FailingOuterStruct = defineStruct([["inner", FailingInnerStruct]] as const)
+    const target = new ArrayBuffer(FailingOuterStruct.size)
+    new Uint8Array(target).fill(0xaa)
+    expect(() => FailingOuterStruct.packInto({ inner: { first: 1, second: 2 } }, new DataView(target), 0)).toThrow(
+      "nested validation failed",
+    )
+    expect([...new Uint8Array(target)]).toEqual(Array(FailingOuterStruct.size).fill(0xaa))
+  })
+
   it("packs and unpacks raw object pointers", () => {
     interface TestObject {
       ptr: Pointer | null
