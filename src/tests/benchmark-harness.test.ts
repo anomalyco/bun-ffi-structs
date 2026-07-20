@@ -66,7 +66,7 @@ it("benchmark harness rejects unknown exact scenarios", async () => {
   ).rejects.toThrow("Unknown benchmark scenarios: missing/scenario")
 })
 
-it("benchmark harness reports Tinybench statistics and timestamp provider", async () => {
+it("benchmark harness reports Tinybench statistics and runtime-selected timestamp provider", async () => {
   const jsonPath = join(tmpdir(), `bun-ffi-structs-benchmark-${process.pid}.json`)
   const successfulScenario: BenchmarkScenario = {
     name: "harness/tinybench-statistics",

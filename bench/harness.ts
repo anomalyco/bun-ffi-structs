@@ -344,8 +344,13 @@ function errorMessage(error: unknown): string {
 }
 
 function forceGC(): void {
-  Bun.gc(true)
-  Bun.gc(true)
+  if (typeof Bun !== "undefined") {
+    Bun.gc(true)
+    Bun.gc(true)
+  } else {
+    globalThis.gc?.()
+    globalThis.gc?.()
+  }
 }
 
 function summarizeStatistics(statistics: Statistics, retainSamples: boolean): StatisticsSummary {
@@ -394,7 +399,7 @@ function runTinybenchAttempt(
     throws: true,
     retainSamples: options.retainSamples,
     concurrency: null,
-    timestampProvider: "bunNanoseconds",
+    timestampProvider: "auto",
     setup: (_task, nextMode) => {
       mode = nextMode ?? "run"
       if (mode === "run") iteration = 0
@@ -572,6 +577,9 @@ function defaultMemoryIterations(runtime: BenchmarkRuntime): number {
 }
 
 function runMemoryScenario(scenario: BenchmarkScenario, options: BenchmarkOptions): MemoryResult {
+  if (typeof Bun === "undefined" && !globalThis.gc) {
+    throw new Error("Node memory benchmarks require --expose-gc")
+  }
   const runtime = scenario.setup()
   const iterations = defaultMemoryIterations(runtime)
   const samples: MemoryTrial[] = []
@@ -771,7 +779,7 @@ function writeJson(
             derivedLatency: "nanoseconds",
           },
           runtime: {
-            bun: Bun.version,
+            bun: typeof Bun !== "undefined" ? Bun.version : undefined,
             node: process.versions.node,
             v8: process.versions.v8,
             platform: process.platform,

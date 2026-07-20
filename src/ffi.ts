@@ -65,7 +65,8 @@ function createNodeBackend(nodeFfi: NodeFfiModule): FfiBackend {
   return {
     ptr(value) {
       if (ArrayBuffer.isView(value)) {
-        return nodeFfi.getRawPointer(value.buffer as ArrayBuffer) + BigInt(value.byteOffset)
+        const pointer = nodeFfi.getRawPointer(value.buffer as ArrayBuffer)
+        return value.byteOffset === 0 ? pointer : pointer + BigInt(value.byteOffset)
       }
 
       if (value instanceof ArrayBuffer) {

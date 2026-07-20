@@ -27,6 +27,9 @@ bun run bench -- --list
 # Machine-readable output and repeated retained-memory measurements
 bun run bench -- --json out/bench.json
 bun run bench -- --filter styled-chunks --memory --memory-trials 5
+
+# Node memory mode additionally requires --expose-gc
+node --experimental-ffi --expose-gc path/to/bundled-benchmark.mjs --memory
 ```
 
 Useful controls:
@@ -48,7 +51,8 @@ Each scenario:
 
 1. Creates fixtures outside the measured region.
 2. Runs a correctness preflight.
-3. Runs in a fresh synchronous Tinybench instance with `async: false`, `throws: true`, and `bunNanoseconds` timestamps.
+3. Runs in a fresh synchronous Tinybench instance with `async: false`, `throws: true`, and Tinybench's `auto` timestamp provider
+   (`bunNanoseconds` on Bun and `hrtimeNow` on Node).
 4. Uses Tinybench's automatic warmup and minimum time/iteration stopping conditions.
 5. Reports Tinybench p50/p75/p99/p99.5/p99.9, sample variance, SD, SEM, Student-t critical value, MOE, RME, and throughput.
 6. Counts attempted operations and the first operation error before Tinybench stops the failed task.
@@ -70,7 +74,7 @@ fields ending in `Ns` are nanoseconds.
 
 The optional memory mode runs repeated trials with forced GC and subtracts a same-sized retention-array control. It reports
 retained output memory, not transient peak allocation or a leak claim. RSS and heap reservation remain runtime-level signals and
-should be compared across repeated runs on the same machine.
+should be compared across repeated runs on the same machine. Node memory runs fail unless `--expose-gc` is enabled.
 
 ## OpenTUI Mapping
 

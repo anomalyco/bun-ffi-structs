@@ -287,6 +287,9 @@ function toItemCount(length: number | bigint): number {
   return typeof length === "bigint" ? Number(length) : length
 }
 
+const arrayPreallocationThreshold = 256
+const maxArrayLength = 0xffffffff
+
 export function packObjectArray(val: (PointyObject | null)[]) {
   const buffer = new ArrayBuffer(val.length * pointerSize)
   const bufferView = new DataView(buffer)
@@ -690,7 +693,6 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       const relativeOffset = lengthOfField.offset - requester.offset
 
       requester.unpack = (view, off) => {
-        const result = []
         const length = lengthOfField.unpack(view, off + relativeOffset)
         const itemCount = toItemCount(length)
         const ptrAddress = pointerUnpacker(view, off)
@@ -705,9 +707,20 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         const buffer = toArrayBuffer(ptrAddress, 0, itemCount * elemSize)
         const bufferView = new DataView(buffer)
 
-        for (let i = 0; i < itemCount; i++) {
-          result.push(primitiveUnpack(bufferView, i * elemSize))
+        if (
+          Number.isSafeInteger(itemCount) &&
+          itemCount >= arrayPreallocationThreshold &&
+          itemCount <= maxArrayLength
+        ) {
+          const result = new Array(itemCount)
+          for (let i = 0; i < itemCount; i++) {
+            result[i] = primitiveUnpack(bufferView, i * elemSize)
+          }
+          return result
         }
+
+        const result = []
+        for (let i = 0; i < itemCount; i++) result.push(primitiveUnpack(bufferView, i * elemSize))
         return result
       }
     } else {
@@ -716,7 +729,6 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       const relativeOffset = lengthOfField.offset - requester.offset
 
       requester.unpack = (view, off) => {
-        const result = []
         const length = lengthOfField.unpack(view, off + relativeOffset)
         const itemCount = toItemCount(length)
         const ptrAddress = pointerUnpacker(view, off)
@@ -731,9 +743,20 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         const buffer = toArrayBuffer(ptrAddress, 0, itemCount * elemSize)
         const bufferView = new DataView(buffer)
 
-        for (let i = 0; i < itemCount; i++) {
-          result.push(def.from(enumUnpack(bufferView, i * elemSize)))
+        if (
+          Number.isSafeInteger(itemCount) &&
+          itemCount >= arrayPreallocationThreshold &&
+          itemCount <= maxArrayLength
+        ) {
+          const result = new Array(itemCount)
+          for (let i = 0; i < itemCount; i++) {
+            result[i] = def.from(enumUnpack(bufferView, i * elemSize))
+          }
+          return result
         }
+
+        const result = []
+        for (let i = 0; i < itemCount; i++) result.push(def.from(enumUnpack(bufferView, i * elemSize)))
         return result
       }
     }
@@ -756,13 +779,12 @@ export function defineStruct<const Fields extends readonly StructField[], const 
   }))
   const layoutByName = new Map(description.map((f) => [f.name, f]))
   const arrayFields = new Map(Object.entries(arrayFieldsMetadata))
+  const iterableArrayFields = layout.filter((field) => Array.isArray(field.type))
 
   const materializeArrayIterables = (obj: any) => {
     let normalized = obj
 
-    for (const field of layout) {
-      if (!Array.isArray(field.type)) continue
-
+    for (const field of iterableArrayFields) {
       const value = obj[field.name]
       if (value == null || Array.isArray(value) || ArrayBuffer.isView(value)) continue
       if (typeof value[Symbol.iterator] !== "function") continue
@@ -925,7 +947,9 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       }
 
       const view = new DataView(buf)
-      const results: any[] = []
+      const preallocated =
+        Number.isSafeInteger(count) && count >= arrayPreallocationThreshold && count <= maxArrayLength
+      const results: any[] = preallocated ? new Array(count) : []
 
       for (let i = 0; i < count; i++) {
         const offset = i * totalSize
@@ -945,9 +969,12 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         }
 
         if (structDefOptions?.reduceValue) {
-          results.push(structDefOptions.reduceValue(result))
+          const value = structDefOptions.reduceValue(result)
+          if (preallocated) results[i] = value
+          else results.push(value)
         } else {
-          results.push(result as StructObjectOutputType<Fields>)
+          if (preallocated) results[i] = result as StructObjectOutputType<Fields>
+          else results.push(result as StructObjectOutputType<Fields>)
         }
       }
 
