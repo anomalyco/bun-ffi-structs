@@ -440,6 +440,25 @@ describe("Structs FFI", () => {
       expect(unpacked.valueCount).toBe(3)
       expect(unpacked.values).toEqual(["LOW", "MEDIUM", "HIGH"])
     })
+
+    it("should apply unpackTransform after resolving lengthOf fields", () => {
+      const TestStruct = defineStruct([
+        ["text", "char*", { unpackTransform: (value: string | null) => value?.toUpperCase() ?? null }],
+        ["textLength", "u32", { lengthOf: "text" }],
+        ["values", ["u32"], { unpackTransform: (values: number[]) => values.reduce((sum, value) => sum + value, 0) }],
+        ["valueCount", "u32", { lengthOf: "values" }],
+      ] as const)
+
+      const unpacked = TestStruct.unpack(
+        TestStruct.pack({
+          text: "hello",
+          values: [10, 20, 30],
+        }),
+      )
+
+      expect(unpacked.text).toBe("HELLO")
+      expect(unpacked.values).toBe(60)
+    })
   })
 
   describe("object pointers", () => {

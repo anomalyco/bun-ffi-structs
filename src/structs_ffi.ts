@@ -179,6 +179,7 @@ interface StructLayoutField {
   validate?: ValidationFunction[]
   pack: (view: DataView, offset: number, value: any, obj: any, options?: StructFieldPackOptions) => void
   unpack: (view: DataView, offset: number) => any
+  unpackTransform?: (value: any) => any
   type: PrimitiveType | EnumDef<any> | StructDef<any> | "cstring" | "char*" | ObjectPointerDef<any> | readonly [any]
   lengthOf?: string
 }
@@ -627,6 +628,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       default: options.default,
       pack,
       unpack,
+      unpackTransform: options.unpackTransform,
       type: typeOrStruct,
       lengthOf: options.lengthOf,
     }
@@ -729,6 +731,11 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         }
         return result
       }
+    }
+
+    if (requester.unpackTransform) {
+      const originalUnpack = requester.unpack
+      requester.unpack = (view, off) => requester.unpackTransform!(originalUnpack(view, off))
     }
   }
 
