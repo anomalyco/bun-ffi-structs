@@ -752,6 +752,23 @@ export function defineStruct<const Fields extends readonly StructField[], const 
   const layoutByName = new Map(description.map((f) => [f.name, f]))
   const arrayFields = new Map(Object.entries(arrayFieldsMetadata))
 
+  const materializeArrayIterables = (obj: any) => {
+    let normalized = obj
+
+    for (const field of layout) {
+      if (!Array.isArray(field.type)) continue
+
+      const value = obj[field.name]
+      if (value == null || Array.isArray(value) || ArrayBuffer.isView(value)) continue
+      if (typeof value[Symbol.iterator] !== "function") continue
+
+      if (normalized === obj) normalized = { ...obj }
+      normalized[field.name] = Array.from(value)
+    }
+
+    return normalized
+  }
+
   return {
     __type: "struct",
     size: totalSize,
@@ -768,6 +785,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       if (structDefOptions?.mapValue) {
         mappedObj = structDefOptions.mapValue(obj)
       }
+      mappedObj = materializeArrayIterables(mappedObj)
 
       for (const field of layout) {
         const value = (mappedObj as any)[field.name] ?? field.default
@@ -797,6 +815,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       if (structDefOptions?.mapValue) {
         mappedObj = structDefOptions.mapValue(obj)
       }
+      mappedObj = materializeArrayIterables(mappedObj)
 
       for (const field of layout) {
         const value = (mappedObj as any)[field.name] ?? field.default
@@ -864,6 +883,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         if (structDefOptions?.mapValue) {
           mappedObj = structDefOptions.mapValue(objects[i])
         }
+        mappedObj = materializeArrayIterables(mappedObj)
 
         for (const field of layout) {
           const value = (mappedObj as any)[field.name] ?? field.default

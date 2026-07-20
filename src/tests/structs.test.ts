@@ -459,6 +459,37 @@ describe("Structs FFI", () => {
       expect(unpacked.text).toBe("HELLO")
       expect(unpacked.values).toBe(60)
     })
+
+    it("should pack iterable array inputs", () => {
+      const TestStruct = defineStruct([
+        ["valueCount", "u32", { lengthOf: "values" }],
+        ["values", ["u32"]],
+      ] as const)
+
+      const fromSet = TestStruct.unpack(TestStruct.pack({ values: new Set([1, 2, 3]) }))
+      expect(fromSet.valueCount).toBe(3)
+      expect(fromSet.values).toEqual([1, 2, 3])
+
+      function* values() {
+        yield 4
+        yield 5
+        yield 6
+      }
+
+      const fromGenerator = TestStruct.unpack(TestStruct.pack({ values: values() }))
+      expect(fromGenerator.valueCount).toBe(3)
+      expect(fromGenerator.values).toEqual([4, 5, 6])
+
+      const list = TestStruct.unpackList(TestStruct.packList([{ values: new Set([7, 8]) }, { values: values() }]), 2)
+      expect(list).toEqual([
+        { valueCount: 2, values: [7, 8] },
+        { valueCount: 3, values: [4, 5, 6] },
+      ])
+
+      const intoBuffer = new ArrayBuffer(TestStruct.size)
+      TestStruct.packInto({ values: new Set([9, 10]) }, new DataView(intoBuffer), 0)
+      expect(TestStruct.unpack(intoBuffer)).toEqual({ valueCount: 2, values: [9, 10] })
+    })
   })
 
   describe("object pointers", () => {
