@@ -31,7 +31,7 @@ beforeAll(() => {
   }
 
   const [zigCmd, ...zigPrefixArgs] = zigBuildCommand()
-  const platformArgs = process.platform === "darwin" ? ["-lc"] : []
+  const platformArgs = process.platform === "darwin" ? ["-fallow-shlib-undefined"] : []
   execFileSync(zigCmd, [...zigPrefixArgs, "build-lib", zigFile, "-dynamic", ...platformArgs, `-femit-bin=${libPath}`], {
     cwd: testDir,
     stdio: "inherit",
