@@ -418,6 +418,28 @@ describe("Structs FFI", () => {
       expect(unpacked.colorCount).toBe(3)
       expect(unpacked.colors).toEqual(["RED", "GREEN", "BLUE"])
     })
+
+    it("should pack enum arrays using their custom base type", () => {
+      const TestEnum = defineEnum(
+        {
+          LOW: 1,
+          MEDIUM: 127,
+          HIGH: 255,
+        },
+        "u8",
+      )
+
+      const TestStruct = defineStruct([
+        ["valueCount", "u32", { lengthOf: "values" }],
+        ["values", [TestEnum]],
+      ] as const)
+
+      const packed = TestStruct.pack({ values: ["LOW", "MEDIUM", "HIGH"] })
+      const unpacked = TestStruct.unpack(packed)
+
+      expect(unpacked.valueCount).toBe(3)
+      expect(unpacked.values).toEqual(["LOW", "MEDIUM", "HIGH"])
+    })
   })
 
   describe("object pointers", () => {

@@ -476,6 +476,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       if (isEnum(def)) {
         // Packing an array of enums
         arrayElementSize = typeSizes[def.type]
+        const { pack: enumPack } = primitivePackers(def.type)
         pack = (view, off, val: string[], obj) => {
           if (!val || val.length === 0) {
             pointerPacker(view, off, null)
@@ -485,7 +486,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
           const bufferView = new DataView(buffer)
           for (let i = 0; i < val.length; i++) {
             const num = def.to(val[i]!)
-            bufferView.setUint32(i * arrayElementSize, num, true)
+            enumPack(bufferView, i * arrayElementSize, num)
           }
           pointerPacker(view, off, ptr(buffer))
           retainPointerTarget(view.buffer, buffer)
@@ -703,7 +704,8 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         return result
       }
     } else {
-      const elemSize = def.type === "u32" ? 4 : 8
+      const elemSize = typeSizes[def.type]
+      const { unpack: enumUnpack } = primitivePackers(def.type)
       const relativeOffset = lengthOfField.offset - requester.offset
 
       requester.unpack = (view, off) => {
@@ -723,7 +725,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         const bufferView = new DataView(buffer)
 
         for (let i = 0; i < itemCount; i++) {
-          result.push(def.from(bufferView.getUint32(i * elemSize, true)))
+          result.push(def.from(enumUnpack(bufferView, i * elemSize)))
         }
         return result
       }
