@@ -348,6 +348,31 @@ describe("packList", () => {
     }
   })
 
+  it("should pack nested structs relative to the target DataView", () => {
+    const InnerStruct = defineStruct([
+      ["x", "u32"],
+      ["y", "u32"],
+    ] as const)
+    const OuterStruct = defineStruct([
+      ["inner", InnerStruct],
+      ["id", "u32"],
+    ] as const)
+
+    const prefixLength = 16
+    const backing = new ArrayBuffer(prefixLength + OuterStruct.size)
+    new Uint8Array(backing).fill(0xaa)
+    const target = new DataView(backing, prefixLength, OuterStruct.size)
+
+    OuterStruct.packInto({ inner: { x: 10, y: 20 }, id: 30 }, target, 0)
+
+    const packedRange = backing.slice(prefixLength)
+    expect(OuterStruct.unpack(packedRange)).toEqual({
+      inner: { x: 10, y: 20 },
+      id: 30,
+    })
+    expect([...new Uint8Array(backing, 0, prefixLength)]).toEqual(Array(prefixLength).fill(0xaa))
+  })
+
   it("should work with pack options including validation hints", () => {
     let capturedHints: any[] = []
 

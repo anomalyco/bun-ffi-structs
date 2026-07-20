@@ -433,7 +433,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         pack = (view, off, val, obj, options) => {
           const nestedBuf = typeOrStruct.pack(val, options)
           const nestedView = new Uint8Array(nestedBuf)
-          const dView = new Uint8Array(view.buffer)
+          const dView = new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
           dView.set(nestedView, off)
           retainIfPointerTargets(view.buffer, nestedBuf)
         }
