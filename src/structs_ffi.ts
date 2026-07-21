@@ -183,6 +183,23 @@ interface StructLayoutField {
   lengthOf?: string
 }
 
+interface PlainPrimitiveField {
+  name: string
+  offset: number
+  type: Exclude<PrimitiveType, "pointer">
+}
+
+function hasPlainPrimitiveRuntimeOptions(options: StructFieldOptions): boolean {
+  return (
+    options.optional === true ||
+    options.unpackTransform !== undefined ||
+    options.packTransform !== undefined ||
+    options.lengthOf !== undefined ||
+    options.default !== undefined ||
+    options.validate !== undefined
+  )
+}
+
 function isStruct(type: any): type is StructDef<any> {
   return typeof type === "object" && type.__type === "struct"
 }
@@ -191,7 +208,10 @@ interface StructInternals {
   layout: StructLayoutField[]
   options?: StructDefOptions
   publicPack: StructDef<any, any>["pack"]
-  materializeArrayIterables(obj: any): any
+  publicUnpack: StructDef<any, any>["unpack"]
+  hasDirectInlinePack: boolean
+  directInlineUnpackSafe: boolean
+  materializeArrayIterables: ((obj: any) => any) | null
 }
 
 const structInternals = new WeakMap<StructDef<any, any>, StructInternals>()
@@ -200,11 +220,12 @@ const freshPackBuffers = new WeakSet<ArrayBufferLike>()
 function packInlineStruct(
   internals: StructInternals,
   view: DataView,
+  baseOffset: number,
   obj: any,
   options?: StructFieldPackOptions,
 ): void {
   let mappedObj = internals.options?.mapValue ? internals.options.mapValue(obj) : obj
-  mappedObj = internals.materializeArrayIterables(mappedObj)
+  if (internals.materializeArrayIterables) mappedObj = internals.materializeArrayIterables(mappedObj)
 
   for (const field of internals.layout) {
     const value = mappedObj[field.name] ?? field.default
@@ -219,8 +240,25 @@ function packInlineStruct(
         })
       }
     }
-    field.pack(view, field.offset, value, mappedObj, options)
+    field.pack(view, baseOffset + field.offset, value, mappedObj, options)
   }
+}
+
+function unpackInlineStruct(internals: StructInternals, view: DataView, baseOffset: number): any {
+  const result: any = internals.options?.default ? { ...internals.options.default } : {}
+
+  for (const field of internals.layout) {
+    if (!field.unpack) continue
+
+    try {
+      result[field.name] = field.unpack(view, baseOffset + field.offset)
+    } catch (error) {
+      console.error(`Error unpacking field '${field.name}' at offset ${field.offset}:`, error)
+      throw error
+    }
+  }
+
+  return internals.options?.reduceValue ? internals.options.reduceValue(result) : result
 }
 
 function primitivePackers(type: PrimitiveType) {
@@ -273,18 +311,34 @@ function primitivePackers(type: PrimitiveType) {
       unpack = (view: DataView, off: number) => view.getFloat64(off, true)
       break
     case "pointer":
-      pack = (view: DataView, off: number, val: Pointer) => {
-        pointerSize === 8
-          ? view.setBigUint64(off, val ? BigInt(val) : 0n, true)
-          : view.setUint32(off, val ? Number(val) : 0, true)
-      }
-      unpack = (view: DataView, off: number): Pointer => {
-        if (pointerSize === 8) {
-          const value = view.getBigUint64(off, true)
-          return isBun ? Number(value) : value
+      if (pointerSize === 8 && isBun) {
+        pack = (view: DataView, off: number, val: Pointer) => {
+          if (!val) {
+            view.setUint32(off, 0, true)
+            view.setUint32(off + 4, 0, true)
+          } else if (typeof val === "number" && Number.isInteger(val)) {
+            view.setUint32(off, val, true)
+            view.setUint32(off + 4, Math.floor(val / 0x100000000), true)
+          } else {
+            view.setBigUint64(off, BigInt(val), true)
+          }
         }
+        unpack = (view: DataView, off: number): Pointer =>
+          view.getUint32(off, true) + view.getUint32(off + 4, true) * 0x100000000
+      } else {
+        pack = (view: DataView, off: number, val: Pointer) => {
+          pointerSize === 8
+            ? view.setBigUint64(off, val ? BigInt(val) : 0n, true)
+            : view.setUint32(off, val ? Number(val) : 0, true)
+        }
+        unpack = (view: DataView, off: number): Pointer => {
+          if (pointerSize === 8) {
+            const value = view.getBigUint64(off, true)
+            return isBun ? Number(value) : value
+          }
 
-        return view.getUint32(off, true)
+          return view.getUint32(off, true)
+        }
       }
       break
     default:
@@ -295,7 +349,180 @@ function primitivePackers(type: PrimitiveType) {
   return { pack, unpack }
 }
 
+function primitiveSetterSource(type: PlainPrimitiveField["type"], offset: number, value: string): string {
+  const target = `baseOffset + ${offset}`
+  switch (type) {
+    case "u8":
+      return `view.setUint8(${target}, ${value})`
+    case "bool_u8":
+      return `view.setUint8(${target}, ${value} ? 1 : 0)`
+    case "bool_u32":
+      return `view.setUint32(${target}, ${value} ? 1 : 0, true)`
+    case "u16":
+      return `view.setUint16(${target}, ${value}, true)`
+    case "i16":
+      return `view.setInt16(${target}, ${value}, true)`
+    case "u32":
+      return `view.setUint32(${target}, ${value}, true)`
+    case "i32":
+      return `view.setInt32(${target}, ${value}, true)`
+    case "i64":
+      return `view.setBigInt64(${target}, BigInt(${value}), true)`
+    case "u64":
+      return `view.setBigUint64(${target}, BigInt(${value}), true)`
+    case "f32":
+      return `view.setFloat32(${target}, ${value}, true)`
+    case "f64":
+      return `view.setFloat64(${target}, ${value}, true)`
+  }
+}
+
+function primitiveGetterSource(type: PlainPrimitiveField["type"], offset: number): string {
+  const target = `baseOffset + ${offset}`
+  switch (type) {
+    case "u8":
+      return `view.getUint8(${target})`
+    case "bool_u8":
+      return `Boolean(view.getUint8(${target}))`
+    case "bool_u32":
+      return `Boolean(view.getUint32(${target}, true))`
+    case "u16":
+      return `view.getUint16(${target}, true)`
+    case "i16":
+      return `view.getInt16(${target}, true)`
+    case "u32":
+      return `view.getUint32(${target}, true)`
+    case "i32":
+      return `view.getInt32(${target}, true)`
+    case "i64":
+      return `view.getBigInt64(${target}, true)`
+    case "u64":
+      return `view.getBigUint64(${target}, true)`
+    case "f32":
+      return `view.getFloat32(${target}, true)`
+    case "f64":
+      return `view.getFloat64(${target}, true)`
+  }
+}
+
+function compilePlainPrimitivePackList(fields: PlainPrimitiveField[], totalSize: number) {
+  const writes = fields
+    .map((field, index) => {
+      const value = `value${index}`
+      const missing = `Packing non-optional field '${field.name}' at index `
+      return `
+        const ${value} = obj[${JSON.stringify(field.name)}] ?? undefined
+        if (${value} === undefined) fatalError(${JSON.stringify(missing)} + index + ${JSON.stringify(
+          " but value is undefined (and no default provided)",
+        )})
+        ${primitiveSetterSource(field.type, field.offset, value)}
+      `
+    })
+    .join("\n")
+
+  return new Function(
+    "fatalError",
+    `return function packPlainPrimitiveList(objects) {
+      const buffer = new ArrayBuffer(${totalSize} * objects.length)
+      const view = new DataView(buffer)
+      for (let index = 0, baseOffset = 0; index < objects.length; index++, baseOffset += ${totalSize}) {
+        const obj = objects[index]
+        ${writes}
+      }
+      return buffer
+    }`,
+  )(fatalError) as (objects: any[]) => ArrayBuffer
+}
+
+function compilePlainPrimitivePack(fields: PlainPrimitiveField[], totalSize: number) {
+  const writes = fields
+    .map((field, index) => {
+      const value = `value${index}`
+      return `
+        const ${value} = obj[${JSON.stringify(field.name)}] ?? undefined
+        if (${value} === undefined) fatalError(${JSON.stringify(
+          `Packing non-optional field '${field.name}' but value is undefined (and no default provided)`,
+        )})
+        ${primitiveSetterSource(field.type, field.offset, value)}
+      `
+    })
+    .join("\n")
+
+  return new Function(
+    "fatalError",
+    `return function packPlainPrimitive(obj) {
+      const buffer = new ArrayBuffer(${totalSize})
+      const view = new DataView(buffer)
+      let baseOffset = 0
+      ${writes}
+      return buffer
+    }`,
+  )(fatalError) as (obj: any) => ArrayBuffer
+}
+
+function compilePlainPrimitiveUnpackList(fields: PlainPrimitiveField[], totalSize: number) {
+  const reads = fields
+    .map(
+      (field, index) => `
+        let value${index}
+        try {
+          value${index} = ${primitiveGetterSource(field.type, field.offset)}
+        } catch (error) {
+          console.error(${JSON.stringify(`Error unpacking field '${field.name}' at index `)} + index + ${JSON.stringify(
+            ", offset ",
+          )} + (baseOffset + ${field.offset}) + ":", error)
+          throw error
+        }
+      `,
+    )
+    .join("\n")
+  const properties = fields.map((field, index) => `${JSON.stringify(field.name)}: value${index}`).join(",")
+
+  return new Function(
+    `return function unpackPlainPrimitiveList(view, count) {
+      const preallocated = Number.isSafeInteger(count) && count >= ${arrayPreallocationThreshold} && count <= ${maxArrayLength}
+      const results = preallocated ? new Array(count) : []
+      for (let index = 0, baseOffset = 0; index < count; index++, baseOffset += ${totalSize}) {
+        ${reads}
+        const value = { ${properties} }
+        if (preallocated) results[index] = value
+        else results.push(value)
+      }
+      return results
+    }`,
+  )() as (view: DataView, count: number) => any[]
+}
+
+function compilePlainPrimitiveUnpack(fields: PlainPrimitiveField[]) {
+  const reads = fields
+    .map(
+      (field, index) => `
+        let value${index}
+        try {
+          value${index} = ${primitiveGetterSource(field.type, field.offset)}
+        } catch (error) {
+          console.error(${JSON.stringify(`Error unpacking field '${field.name}' at offset ${field.offset}:`)}, error)
+          throw error
+        }
+      `,
+    )
+    .join("\n")
+  const properties = fields.map((field, index) => `${JSON.stringify(field.name)}: value${index}`).join(",")
+
+  return new Function(
+    `return function unpackPlainPrimitive(view) {
+      let baseOffset = 0
+      ${reads}
+      return { ${properties} }
+    }`,
+  )() as (view: DataView) => any
+}
+
 const { pack: pointerPacker, unpack: pointerUnpacker } = primitivePackers("pointer")
+const foreignMemoryPointerUnpacker =
+  pointerSize === 8 && isBun
+    ? (view: DataView, off: number): Pointer => Number(view.getBigUint64(off, true))
+    : pointerUnpacker
 
 const retainedPointerTargets = new WeakMap<ArrayBufferLike, unknown[]>()
 
@@ -323,6 +550,8 @@ function toItemCount(length: number | bigint): number {
 }
 
 const arrayPreallocationThreshold = 256
+// Delay generated kernels until repeated small calls or one large call can amortize compilation.
+const plainPrimitiveSpecializationThreshold = 256
 const maxArrayLength = 0xffffffff
 
 export function packObjectArray(val: (PointyObject | null)[]) {
@@ -347,6 +576,9 @@ export function defineStruct<const Fields extends readonly StructField[], const 
   let offset = 0
   let maxAlign = 1
   let hasDirectInlinePack = false
+  let directInlineUnpackSafe = !structDefOptions?.default && !structDefOptions?.reduceValue
+  let plainPrimitiveFields: PlainPrimitiveField[] | null =
+    structDefOptions?.mapValue || structDefOptions?.default || structDefOptions?.reduceValue ? null : []
   const layout: StructLayoutField[] = []
   const lengthOfFields: Record<string, StructLayoutField> = {}
   const lengthOfRequested: {
@@ -367,6 +599,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     let unpack: (view: DataView, offset: number) => any
     let needsLengthOf = false
     let lengthOfDef: EnumDef<any> | PrimitiveType | null = null
+    let plainPrimitiveType: PlainPrimitiveField["type"] | null = null
 
     // Primitive
     if (isPrimitiveType(typeOrStruct)) {
@@ -395,8 +628,14 @@ export function defineStruct<const Fields extends readonly StructField[], const 
           pointerPacker(view, off, val)
         }
       }
+
+      if (plainPrimitiveFields) {
+        if (typeOrStruct === "pointer" || hasPlainPrimitiveRuntimeOptions(options)) plainPrimitiveFields = null
+        else plainPrimitiveType = typeOrStruct
+      }
       // CString (null-terminated)
     } else if (typeof typeOrStruct === "string" && typeOrStruct === "cstring") {
+      plainPrimitiveFields = null
       size = pointerSize
       align = pointerSize
       pack = (view: DataView, off: number, val: string | null) => {
@@ -417,6 +656,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       }
       // char* (raw string pointer, length usually external)
     } else if (typeof typeOrStruct === "string" && typeOrStruct === "char*") {
+      plainPrimitiveFields = null
       size = pointerSize
       align = pointerSize
       pack = (view: DataView, off: number, val: string | null) => {
@@ -438,6 +678,8 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       needsLengthOf = true // Mark for later resolution
       // Enum
     } else if (isEnum(typeOrStruct)) {
+      plainPrimitiveFields = null
+      directInlineUnpackSafe = false
       const base = typeOrStruct.type
       size = typeSizes[base]
       align = typeAlignments[base]
@@ -452,7 +694,9 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       }
       // Struct
     } else if (isStruct(typeOrStruct)) {
+      plainPrimitiveFields = null
       if (options.asPointer === true) {
+        directInlineUnpackSafe = false
         size = pointerSize
         align = pointerSize
         pack = (view, off, val, obj, options) => {
@@ -472,13 +716,12 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         size = typeOrStruct.size
         align = typeOrStruct.align
         const internals = structInternals.get(typeOrStruct)
+        directInlineUnpackSafe &&= !!internals?.directInlineUnpackSafe
         hasDirectInlinePack ||= !!internals && !options.optional
         pack = (view, off, val, obj, packOptions) => {
           const publicPack = typeOrStruct.pack
           if (internals && freshPackBuffers.has(view.buffer) && publicPack === internals.publicPack) {
-            const nestedView = new DataView(view.buffer, view.byteOffset + off, size)
-            new Uint8Array(nestedView.buffer, nestedView.byteOffset, size).fill(0)
-            packInlineStruct(internals, nestedView, val, packOptions)
+            packInlineStruct(internals, view, off, val, packOptions)
             return
           }
 
@@ -489,12 +732,23 @@ export function defineStruct<const Fields extends readonly StructField[], const 
           retainIfPointerTargets(view.buffer, nestedBuf)
         }
         unpack = (view, off) => {
-          const slice = view.buffer.slice(off, off + size)
+          const publicUnpack = Object.getOwnPropertyDescriptor(typeOrStruct, "unpack")?.value
+          if (
+            internals?.directInlineUnpackSafe &&
+            publicUnpack === internals.publicUnpack &&
+            !(view.buffer instanceof SharedArrayBuffer)
+          ) {
+            return unpackInlineStruct(internals, view, off)
+          }
+
+          const start = view.byteOffset + off
+          const slice = view.buffer.slice(start, start + size)
           return typeOrStruct.unpack(slice)
         }
       }
       // Object Pointer
     } else if (isObjectPointerDef(typeOrStruct)) {
+      plainPrimitiveFields = null
       size = pointerSize
       align = pointerSize
 
@@ -519,12 +773,14 @@ export function defineStruct<const Fields extends readonly StructField[], const 
 
       // Array ([EnumType], [StructType], [PrimitiveType], ...)
     } else if (Array.isArray(typeOrStruct) && typeOrStruct.length === 1 && typeOrStruct[0] !== undefined) {
+      plainPrimitiveFields = null
       const [def] = typeOrStruct
       size = pointerSize // Arrays are always represented by a pointer to the data
       align = pointerSize
       let arrayElementSize: number
 
       if (isEnum(def)) {
+        directInlineUnpackSafe = false
         // Packing an array of enums
         arrayElementSize = typeSizes[def.type]
         const { pack: enumPack } = primitivePackers(def.type)
@@ -546,8 +802,10 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         needsLengthOf = true
         lengthOfDef = def
       } else if (isStruct(def)) {
+        directInlineUnpackSafe = false
         // Array of Structs
         arrayElementSize = def.size
+        const defInternals = structInternals.get(def)
         pack = (view, off, val: any[], obj, options) => {
           if (!val || val.length === 0) {
             pointerPacker(view, off, null)
@@ -555,8 +813,19 @@ export function defineStruct<const Fields extends readonly StructField[], const 
           }
           const buffer = new ArrayBuffer(val.length * arrayElementSize)
           const bufferView = new DataView(buffer)
-          for (let i = 0; i < val.length; i++) {
-            def.packInto(val[i], bufferView, i * arrayElementSize, options)
+          if (defInternals?.hasDirectInlinePack) {
+            freshPackBuffers.add(buffer)
+            try {
+              for (let i = 0; i < val.length; i++) {
+                def.packInto(val[i], bufferView, i * arrayElementSize, options)
+              }
+            } finally {
+              freshPackBuffers.delete(buffer)
+            }
+          } else {
+            for (let i = 0; i < val.length; i++) {
+              def.packInto(val[i], bufferView, i * arrayElementSize, options)
+            }
           }
           pointerPacker(view, off, ptr(buffer))
           retainPointerTarget(view.buffer, buffer)
@@ -586,6 +855,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         needsLengthOf = true
         lengthOfDef = def
       } else if (isObjectPointerDef(def)) {
+        directInlineUnpackSafe = false
         arrayElementSize = pointerSize
         pack = (view, off, val) => {
           if (!val || val.length === 0) {
@@ -610,8 +880,12 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     }
 
     offset = alignOffset(offset, align)
+    if (plainPrimitiveFields && plainPrimitiveType) {
+      plainPrimitiveFields.push({ name, offset, type: plainPrimitiveType })
+    }
 
     if (options.unpackTransform) {
+      directInlineUnpackSafe = false
       const originalUnpack = unpack
       unpack = (view, off) => options.unpackTransform!(originalUnpack(view, off))
     }
@@ -717,7 +991,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       const relativeOffset = lengthOfField.offset - requester.offset
 
       requester.unpack = (view, off) => {
-        const ptrAddress = pointerUnpacker(view, off)
+        const ptrAddress = foreignMemoryPointerUnpacker(view, off)
         const length = lengthOfField.unpack(view, off + relativeOffset)
 
         if (isNullPointer(ptrAddress)) {
@@ -741,7 +1015,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       requester.unpack = (view, off) => {
         const length = lengthOfField.unpack(view, off + relativeOffset)
         const itemCount = toItemCount(length)
-        const ptrAddress = pointerUnpacker(view, off)
+        const ptrAddress = foreignMemoryPointerUnpacker(view, off)
 
         if (isNullPointer(ptrAddress) && itemCount > 0) {
           throw new Error(`Array field ${requester.name} has null pointer but length ${length}.`)
@@ -777,7 +1051,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       requester.unpack = (view, off) => {
         const length = lengthOfField.unpack(view, off + relativeOffset)
         const itemCount = toItemCount(length)
-        const ptrAddress = pointerUnpacker(view, off)
+        const ptrAddress = foreignMemoryPointerUnpacker(view, off)
 
         if (isNullPointer(ptrAddress) && itemCount > 0) {
           throw new Error(`Array field ${requester.name} has null pointer but length ${length}.`)
@@ -826,21 +1100,43 @@ export function defineStruct<const Fields extends readonly StructField[], const 
   const layoutByName = new Map(description.map((f) => [f.name, f]))
   const arrayFields = new Map(Object.entries(arrayFieldsMetadata))
   const iterableArrayFields = layout.filter((field) => Array.isArray(field.type))
+  if (plainPrimitiveFields?.length !== layout.length || plainPrimitiveFields.length === 0) plainPrimitiveFields = null
+  let plainPrimitivePackList: ((objects: any[]) => ArrayBuffer) | undefined
+  let plainPrimitiveUnpackList: ((view: DataView, count: number) => any[]) | undefined
+  let plainPrimitivePack: ((obj: any) => ArrayBuffer) | undefined
+  let plainPrimitiveUnpack: ((view: DataView) => any) | undefined
+  let plainPrimitivePackListItems = 0
+  let plainPrimitiveUnpackListItems = 0
+  let plainPrimitivePackCalls = 0
+  let plainPrimitiveUnpackCalls = 0
 
-  const materializeArrayIterables = (obj: any) => {
-    let normalized = obj
-
-    for (const field of iterableArrayFields) {
-      const value = obj[field.name]
-      if (value == null || Array.isArray(value) || ArrayBuffer.isView(value)) continue
-      if (typeof value[Symbol.iterator] !== "function") continue
-
-      if (normalized === obj) normalized = { ...obj }
-      normalized[field.name] = Array.from(value)
+  const compilePlainPrimitive = <T>(compile: () => T): T | undefined => {
+    try {
+      return compile()
+    } catch (error) {
+      if (!(error instanceof EvalError)) throw error
+      plainPrimitiveFields = null
+      return undefined
     }
-
-    return normalized
   }
+
+  const materializeArrayIterables =
+    iterableArrayFields.length === 0
+      ? null
+      : (obj: any) => {
+          let normalized = obj
+
+          for (const field of iterableArrayFields) {
+            const value = obj[field.name]
+            if (value == null || Array.isArray(value) || ArrayBuffer.isView(value)) continue
+            if (typeof value[Symbol.iterator] !== "function") continue
+
+            if (normalized === obj) normalized = { ...obj }
+            normalized[field.name] = Array.from(value)
+          }
+
+          return normalized
+        }
 
   const definition = {
     __type: "struct",
@@ -851,6 +1147,14 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     arrayFields,
 
     pack(obj: Simplify<StructObjectInputType<Fields>>, options?: StructFieldPackOptions): ArrayBuffer {
+      if (
+        plainPrimitiveFields &&
+        (plainPrimitivePack || ++plainPrimitivePackCalls >= plainPrimitiveSpecializationThreshold)
+      ) {
+        plainPrimitivePack ??= compilePlainPrimitive(() => compilePlainPrimitivePack(plainPrimitiveFields!, totalSize))
+        if (plainPrimitivePack) return plainPrimitivePack(obj)
+      }
+
       const buf = new ArrayBuffer(totalSize)
       const view = new DataView(buf)
 
@@ -858,7 +1162,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       if (structDefOptions?.mapValue) {
         mappedObj = structDefOptions.mapValue(obj)
       }
-      mappedObj = materializeArrayIterables(mappedObj)
+      if (materializeArrayIterables) mappedObj = materializeArrayIterables(mappedObj)
       if (hasDirectInlinePack) freshPackBuffers.add(buf)
 
       try {
@@ -893,7 +1197,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       if (structDefOptions?.mapValue) {
         mappedObj = structDefOptions.mapValue(obj)
       }
-      mappedObj = materializeArrayIterables(mappedObj)
+      if (materializeArrayIterables) mappedObj = materializeArrayIterables(mappedObj)
 
       for (const field of layout) {
         const value = (mappedObj as any)[field.name] ?? field.default
@@ -922,6 +1226,13 @@ export function defineStruct<const Fields extends readonly StructField[], const 
         fatalError(`Buffer size (${buf.byteLength}) is smaller than struct size (${totalSize}) for unpacking.`)
       }
       const view = new DataView(buf)
+      if (
+        plainPrimitiveFields &&
+        (plainPrimitiveUnpack || ++plainPrimitiveUnpackCalls >= plainPrimitiveSpecializationThreshold)
+      ) {
+        plainPrimitiveUnpack ??= compilePlainPrimitive(() => compilePlainPrimitiveUnpack(plainPrimitiveFields!))
+        if (plainPrimitiveUnpack) return plainPrimitiveUnpack(view)
+      }
       // Start with struct-level defaults if provided
       const result: any = structDefOptions?.default ? { ...structDefOptions.default } : {}
 
@@ -952,6 +1263,18 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       if (objects.length === 0) {
         return new ArrayBuffer(0)
       }
+      if (plainPrimitiveFields) {
+        plainPrimitivePackListItems += objects.length
+        if (
+          plainPrimitivePackList ||
+          (objects.length > 1 && plainPrimitivePackListItems >= plainPrimitiveSpecializationThreshold)
+        ) {
+          plainPrimitivePackList ??= compilePlainPrimitive(() =>
+            compilePlainPrimitivePackList(plainPrimitiveFields!, totalSize),
+          )
+          if (plainPrimitivePackList) return plainPrimitivePackList(objects)
+        }
+      }
 
       const buffer = new ArrayBuffer(totalSize * objects.length)
       const view = new DataView(buffer)
@@ -963,7 +1286,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
           if (structDefOptions?.mapValue) {
             mappedObj = structDefOptions.mapValue(objects[i])
           }
-          mappedObj = materializeArrayIterables(mappedObj)
+          if (materializeArrayIterables) mappedObj = materializeArrayIterables(mappedObj)
 
           for (const field of layout) {
             const value = (mappedObj as any)[field.name] ?? field.default
@@ -1003,6 +1326,15 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       }
 
       const view = new DataView(buf)
+      if (plainPrimitiveFields && Number.isSafeInteger(count) && count > 1) {
+        plainPrimitiveUnpackListItems += count
+        if (plainPrimitiveUnpackList || plainPrimitiveUnpackListItems >= plainPrimitiveSpecializationThreshold) {
+          plainPrimitiveUnpackList ??= compilePlainPrimitive(() =>
+            compilePlainPrimitiveUnpackList(plainPrimitiveFields!, totalSize),
+          )
+          if (plainPrimitiveUnpackList) return plainPrimitiveUnpackList(view, count)
+        }
+      }
       const preallocated =
         Number.isSafeInteger(count) && count >= arrayPreallocationThreshold && count <= maxArrayLength
       const results: any[] = preallocated ? new Array(count) : []
@@ -1046,6 +1378,9 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     layout,
     options: structDefOptions,
     publicPack: definition.pack,
+    publicUnpack: definition.unpack,
+    hasDirectInlinePack,
+    directInlineUnpackSafe,
     materializeArrayIterables,
   })
   return definition

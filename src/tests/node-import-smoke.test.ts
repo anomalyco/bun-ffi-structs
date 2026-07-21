@@ -70,6 +70,39 @@ it("imports in Node without node:ffi until pointer helpers are used", () => {
   }
 })
 
+it("falls back when Node disables string code generation", () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "bun-ffi-structs-node-no-codegen-"))
+
+  try {
+    const build = spawnSync("bun", ["build", "src/index.ts", "--outdir", tempDir, "--target", "node"], {
+      cwd: repoRoot,
+      stdio: "pipe",
+    })
+    expect(build.status).toBe(0)
+
+    const indexUrl = pathToFileURL(join(tempDir, "index.js")).href
+    const script = `
+      const { defineStruct } = await import(${JSON.stringify(indexUrl)})
+      const TestStruct = defineStruct([["value", "u32"]])
+      const values = Array.from({ length: 256 }, (_, value) => ({ value }))
+      for (let index = 0; index < 300; index++) {
+        const packed = TestStruct.pack({ value: index })
+        if (TestStruct.unpack(packed).value !== index) throw new Error("single fallback failed")
+      }
+      const packedList = TestStruct.packList(values)
+      const unpackedList = TestStruct.unpackList(packedList, values.length)
+      if (unpackedList[255].value !== 255) throw new Error("list fallback failed")
+    `
+    const node = spawnSync("node", ["--disallow-code-generation-from-strings", "--input-type=module", "-e", script], {
+      cwd: repoRoot,
+      stdio: "pipe",
+    })
+    expect(node.status, node.stderr.toString()).toBe(0)
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true })
+  }
+})
+
 it.skipIf(!supportsNodeFfi)("packs and unpacks pointer-backed data with Node node:ffi", () => {
   const tempDir = mkdtempSync(join(tmpdir(), "bun-ffi-structs-node-ffi-"))
 

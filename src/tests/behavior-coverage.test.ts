@@ -350,6 +350,108 @@ describe("behavior coverage", () => {
     ])
   })
 
+  it("preserves primitive semantics after hot-path specialization", () => {
+    const TestStruct = defineStruct([
+      ["u8", "u8"],
+      ["flag8", "bool_u8"],
+      ["flag32", "bool_u32"],
+      ["u16", "u16"],
+      ["i16", "i16"],
+      ["u32", "u32"],
+      ["i32", "i32"],
+      ["i64", "i64"],
+      ["u64", "u64"],
+      ["f32", "f32"],
+      ["f64", "f64"],
+    ] as const)
+    const value = {
+      u8: 250,
+      flag8: true,
+      flag32: false,
+      u16: 60_000,
+      i16: -12_345,
+      u32: 4_000_000_000,
+      i32: -2_000_000_000,
+      i64: -9_000_000_000n,
+      u64: 18_000_000_000n,
+      f32: 1.25,
+      f64: Math.PI,
+    }
+
+    let getterCalls = 0
+    for (let index = 0; index < 255; index++) TestStruct.pack(value)
+    const getterValue = Object.defineProperty({ ...value }, "u8", {
+      enumerable: true,
+      get() {
+        getterCalls += 1
+        return value.u8
+      },
+    })
+    const packed = TestStruct.pack(getterValue)
+    expect(getterCalls).toBe(1)
+
+    let unpacked = TestStruct.unpack(packed)
+    for (let index = 1; index < 256; index++) unpacked = TestStruct.unpack(packed)
+    expect(unpacked).toEqual(value)
+
+    const values = Array.from({ length: 256 }, (_, index) => ({ ...value, u8: index }))
+    const packedList = TestStruct.packList(values)
+    expect(TestStruct.unpackList(packedList, values.length)).toEqual(values)
+    expect(() => TestStruct.pack({ ...value, u8: undefined } as any)).toThrow(
+      "Packing non-optional field 'u8' but value is undefined",
+    )
+    expect(() => TestStruct.packList([value, { ...value, u16: undefined }] as any)).toThrow(
+      "Packing non-optional field 'u16' at index 1 but value is undefined",
+    )
+  })
+
+  it("keeps nested unpack overrides and callback snapshots on the fallback path", () => {
+    const InnerStruct = defineStruct([
+      [
+        "first",
+        "u32",
+        {
+          unpackTransform: (value: number) => {
+            sourceView.setUint32(secondOffset, 99, true)
+            return value
+          },
+        },
+      ],
+      ["second", "u32"],
+    ] as const)
+    const OuterStruct = defineStruct([["inner", InnerStruct]] as const)
+    const source = OuterStruct.pack({ inner: { first: 1, second: 2 } })
+    const sourceView = new DataView(source)
+    const secondOffset = OuterStruct.layoutByName.get("inner")!.offset + InnerStruct.layoutByName.get("second")!.offset
+
+    expect(OuterStruct.unpack(source).inner).toEqual({ first: 1, second: 2 })
+    expect(sourceView.getUint32(secondOffset, true)).toBe(99)
+
+    const PureInnerStruct = defineStruct([["value", "u32"]] as const)
+    const PureOuterStruct = defineStruct([["inner", PureInnerStruct]] as const)
+    const originalUnpack = PureInnerStruct.unpack
+    let overrideCalls = 0
+    Object.defineProperty(PureInnerStruct, "unpack", {
+      configurable: true,
+      get() {
+        return function (this: typeof PureInnerStruct, buffer: ArrayBuffer) {
+          overrideCalls += 1
+          return originalUnpack.call(this, buffer)
+        }
+      },
+    })
+    expect(PureOuterStruct.unpack(PureOuterStruct.pack({ inner: { value: 7 } })).inner.value).toBe(7)
+    expect(overrideCalls).toBe(1)
+  })
+
+  it("roundtrips safe numeric and bigint pointer values", () => {
+    const PointerStruct = defineStruct([["value", "pointer"]] as const)
+    for (const value of [0, 1, 0x100000001, 0x123456789abcn] as const) {
+      expect(BigInt(PointerStruct.unpack(PointerStruct.pack({ value })).value)).toBe(BigInt(value))
+    }
+    expect(() => PointerStruct.pack({ value: 1.5 })).toThrow()
+  })
+
   it("keeps mapped and reduced inference aligned with runtime values", () => {
     const TestStruct = defineStruct([["value", "u32"]] as const, {
       mapValue: (input: { raw: number }) => ({ value: input.raw }),
