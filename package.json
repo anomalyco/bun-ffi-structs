@@ -1,7 +1,7 @@
 {
   "name": "bun-ffi-structs",
   "description": "Type-safe C-style struct packing and unpacking for Bun and Node.js FFI",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "module": "./dist/index.js",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
