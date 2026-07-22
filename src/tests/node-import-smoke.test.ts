@@ -92,6 +92,18 @@ it("falls back when Node disables string code generation", () => {
       const packedList = TestStruct.packList(values)
       const unpackedList = TestStruct.unpackList(packedList, values.length)
       if (unpackedList[255].value !== 255) throw new Error("list fallback failed")
+      const reused = new ArrayBuffer(TestStruct.size * values.length)
+      const reusedView = new DataView(reused)
+      for (let index = 0; index < 300; index++) TestStruct.packInto({ value: index }, reusedView, 0)
+      TestStruct.packListInto(values, reusedView, 0)
+      const target = {}
+      for (let index = 0; index < 300; index++) TestStruct.unpackInto(reusedView, target)
+      if (target.value !== 0) throw new Error("unpackInto fallback failed")
+      const ReducedStruct = defineStruct([["value", "u32"], ["reserved", "u32", { default: 0 }]], {
+        reduceValue: ({ value }) => ({ value }),
+      })
+      const reduced = ReducedStruct.unpackList(ReducedStruct.packList(values), values.length)
+      if (reduced[255].value !== 255) throw new Error("reducer fallback failed")
     `
     const node = spawnSync("node", ["--disallow-code-generation-from-strings", "--input-type=module", "-e", script], {
       cwd: repoRoot,

@@ -84,8 +84,9 @@ Production schemas mirror `packages/core/src/zig-structs.ts` in OpenTUI. Scenari
 - `AudioStreamStatsStruct.unpack`, used by readiness and backpressure polling at a code-defined 5 ms interval.
 - `SpanInfoStruct.unpackList` at one record and the code-defined 256-record drain maximum.
 - `LineInfoStruct.unpack` with four native `u32` arrays.
-- Logical and visual cursor reads.
+- Allocating and reusable logical/visual cursor, audio polling, and measurement batches.
 - Table measurement batches.
+- Grid and image draw packets using allocating and caller-owned storage.
 - Highlight pack/unpack, cursor styles, terminal capabilities, Unicode output, NativeSpanFeed, audio options, and stats.
 
 OpenTUI establishes a one-chunk case for plain strings and a 256-record maximum for span drains. It does not establish an
@@ -94,8 +95,9 @@ The larger values in this suite are therefore labeled extended or stress scaling
 Styled-color scenarios mirror OpenTUI's normalization path for existing RGBA owners; they do not claim to measure string color
 parsing. Scenarios labeled as isolated unpack components exclude the surrounding native call and renderer work.
 
-Generic library scenarios additionally cover allocation versus `packInto`, schema compilation, primitive and enum arrays,
-iterable materialization, nested structs, transforms/validation, UTF-8 scaling, `allocStruct`, and list scaling.
+Generic library scenarios additionally cover allocation versus `packInto`, `packList` versus manual and compiled `packListInto`,
+schema compilation, primitive and enum arrays, iterable materialization, nested structs, transforms/validation, UTF-8 scaling,
+`allocStruct`, and list scaling.
 
 ## bun-webgpu Mapping
 

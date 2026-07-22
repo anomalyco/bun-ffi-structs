@@ -140,7 +140,18 @@ export type DefineStructReturnType<
 > = StructDef<
   Simplify<Options extends { reduceValue: (value: any) => infer R } ? R : StructObjectOutputType<Fields>>,
   Simplify<Options extends { mapValue: (value: infer V) => any } ? V : StructObjectInputType<Fields>>
->
+> &
+  (Fields[number] extends readonly [string, Exclude<PrimitiveType, "pointer">]
+    ? Options extends
+        | { mapValue: (...args: any[]) => any }
+        | { default: any }
+        | { reduceValue: (...args: any[]) => any }
+      ? {}
+      : StructListPacking<StructObjectInputType<Fields>>
+    : {}) &
+  (Options extends { reduceValue: (value: any) => any }
+    ? {}
+    : ReusableStructDecoding<Simplify<StructObjectOutputType<Fields>>>)
 
 export interface AllocStructOptions {
   lengths?: Record<string, number>
@@ -188,6 +199,14 @@ type StructField =
 
 export interface StructFieldPackOptions {
   validationHints?: any
+}
+
+export interface ReusableStructDecoding<OutputType extends object> {
+  unpackInto<Target extends object>(view: DataView, target: Target, offset?: number): Target & Simplify<OutputType>
+}
+
+export interface StructListPacking<InputType> {
+  packListInto(objects: Simplify<InputType>[], view: DataView, offset: number, options?: StructFieldPackOptions): void
 }
 
 export interface StructFieldDescription {

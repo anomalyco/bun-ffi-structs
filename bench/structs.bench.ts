@@ -4,6 +4,9 @@ import type { Pointer, StructDef } from "../src/types.js"
 import { runBenchmarkSuite, type BenchmarkRuntime, type BenchmarkScenario, type BenchmarkTier } from "./harness.js"
 
 type AnyStruct = StructDef<any, any>
+type ReusableAnyStruct = AnyStruct & {
+  unpackInto(view: DataView, target: any, offset?: number): any
+}
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Benchmark validation failed: ${message}`)
@@ -70,6 +73,66 @@ function packScenario(options: {
   }))
 }
 
+function packIntoScenario(options: {
+  name: string
+  description: string
+  category: string
+  source: BenchmarkScenario["source"]
+  tier: BenchmarkTier
+  struct: AnyStruct
+  value: unknown
+  iterations: number
+  consume: (view: DataView) => number
+}): BenchmarkScenario {
+  return scenario(options.name, options.description, options.category, options.source, options.tier, () => {
+    const buffer = new ArrayBuffer(options.struct.size)
+    const view = new DataView(buffer)
+    return {
+      run: () => {
+        let checksum = 0
+        for (let index = 0; index < options.iterations; index += 1) {
+          options.struct.packInto(options.value, view, 0)
+          checksum += options.consume(view)
+        }
+        return checksum
+      },
+      validate: () => {
+        options.struct.packInto(options.value, view, 0)
+        assertEqual(buffer.byteLength, options.struct.size, `${options.name} header size`)
+      },
+      bytesPerOperation: options.struct.size * options.iterations,
+      workPerOperation: options.iterations,
+      workLabel: "packs",
+    }
+  })
+}
+
+function packConsumeScenario(options: {
+  name: string
+  description: string
+  category: string
+  source: BenchmarkScenario["source"]
+  tier: BenchmarkTier
+  struct: AnyStruct
+  value: unknown
+  iterations: number
+  consume: (view: DataView) => number
+}): BenchmarkScenario {
+  return scenario(options.name, options.description, options.category, options.source, options.tier, () => ({
+    run: () => {
+      let checksum = 0
+      for (let index = 0; index < options.iterations; index += 1) {
+        checksum += options.consume(new DataView(options.struct.pack(options.value)))
+      }
+      return checksum
+    },
+    validate: () => assertEqual(options.struct.pack(options.value).byteLength, options.struct.size, options.name),
+    bytesPerOperation: options.struct.size * options.iterations,
+    workPerOperation: options.iterations,
+    workLabel: "packs",
+  }))
+}
+
 function unpackScenario(options: {
   name: string
   description: string
@@ -91,6 +154,64 @@ function unpackScenario(options: {
     workPerOperation: options.workPerOperation,
     workLabel: options.workLabel,
     memoryIterations: options.memoryIterations,
+  }))
+}
+
+function unpackIntoScenario(options: {
+  name: string
+  description: string
+  category: string
+  source: BenchmarkScenario["source"]
+  tier: BenchmarkTier
+  struct: ReusableAnyStruct
+  buffer: ArrayBuffer
+  target: Record<string, unknown>
+  iterations: number
+  consume: (value: any) => number
+  validate: (value: any) => void
+}): BenchmarkScenario {
+  return scenario(options.name, options.description, options.category, options.source, options.tier, () => {
+    const view = new DataView(options.buffer)
+    return {
+      run: () => {
+        let checksum = 0
+        for (let index = 0; index < options.iterations; index += 1) {
+          checksum += options.consume(options.struct.unpackInto(view, options.target))
+        }
+        return checksum
+      },
+      validate: () => options.validate(options.struct.unpackInto(view, options.target)),
+      bytesPerOperation: options.struct.size * options.iterations,
+      workPerOperation: options.iterations,
+      workLabel: "decodes",
+    }
+  })
+}
+
+function unpackConsumeScenario(options: {
+  name: string
+  description: string
+  category: string
+  source: BenchmarkScenario["source"]
+  tier: BenchmarkTier
+  struct: AnyStruct
+  buffer: ArrayBuffer
+  iterations: number
+  consume: (value: any) => number
+  validate: (value: any) => void
+}): BenchmarkScenario {
+  return scenario(options.name, options.description, options.category, options.source, options.tier, () => ({
+    run: () => {
+      let checksum = 0
+      for (let index = 0; index < options.iterations; index += 1) {
+        checksum += options.consume(options.struct.unpack(options.buffer))
+      }
+      return checksum
+    },
+    validate: () => options.validate(options.struct.unpack(options.buffer)),
+    bytesPerOperation: options.struct.size * options.iterations,
+    workPerOperation: options.iterations,
+    workLabel: "decodes",
   }))
 }
 
@@ -229,7 +350,6 @@ const StyledChunkStruct = defineStruct(
     },
   },
 )
-
 const HighlightStruct = defineStruct([
   ["start", "u32"],
   ["end", "u32"],
@@ -289,6 +409,20 @@ const EncodedCharStruct = defineStruct([
   ["char", "u32"],
 ])
 
+const ImageDrawOptionsStruct = defineStruct([
+  ["x", "i32"],
+  ["y", "i32"],
+  ["width", "u32"],
+  ["height", "u32"],
+  ["pixelWidth", "u32"],
+  ["pixelHeight", "u32"],
+  ["sourceX", "u32"],
+  ["sourceY", "u32"],
+  ["sourceWidth", "u32"],
+  ["sourceHeight", "u32"],
+  ["protocol", "u32"],
+])
+
 const LineInfoStruct = defineStruct([
   ["startCols", ["u32"]],
   ["startColsLen", "u32", { lengthOf: "startCols" }],
@@ -300,7 +434,6 @@ const LineInfoStruct = defineStruct([
   ["wrapsLen", "u32", { lengthOf: "wraps" }],
   ["widthColsMax", "u32"],
 ])
-
 const MeasureResultStruct = defineStruct([
   ["lineCount", "u32"],
   ["widthColsMax", "u32"],
@@ -389,7 +522,6 @@ const SpanInfoStruct = defineStruct(
     }),
   },
 )
-
 const ReserveInfoStruct = defineStruct(
   [
     ["ptr", "pointer"],
@@ -1153,6 +1285,34 @@ scenarios.push(
       assertEqual(value.errorCode, 0, "audio errorCode")
     },
   }),
+  unpackConsumeScenario({
+    name: "opentui/audio-stream-stats/unpack-batch/200",
+    description: "Materialize and consume 200 audio polling snapshots",
+    category: "audio",
+    source: "opentui",
+    tier: "core",
+    struct: AudioStreamStatsStruct,
+    buffer: audioStreamStatsBuffer,
+    iterations: 200,
+    consume: (value) => Number(value.readyGeneration),
+    validate: (value) => assertEqual(value.errorCode, 0, "audio batch errorCode"),
+  }),
+  unpackIntoScenario({
+    name: "opentui/audio-stream-stats/unpack-into-batch/200",
+    description: "Reuse one output object and DataView for 200 audio polling snapshots",
+    category: "audio",
+    source: "opentui",
+    tier: "core",
+    struct: AudioStreamStatsStruct,
+    buffer: audioStreamStatsBuffer,
+    target: {},
+    iterations: 200,
+    consume: (value) => Number(value.readyGeneration),
+    validate: (value) => {
+      assertEqual(value.bytesReceived, audioStreamStatsValue.bytesReceived, "audio reuse bytesReceived")
+      assertEqual(value.errorCode, 0, "audio reuse errorCode")
+    },
+  }),
 )
 
 for (const count of [1, 64, 256]) {
@@ -1175,6 +1335,28 @@ for (const count of [1, 64, 256]) {
         assert(!("reserved" in output[0]!), "SpanInfo reduceValue must remove reserved")
       },
     }),
+    scenario(
+      `opentui/span-info/unpack-list-consume/${count}`,
+      `Materialize, reduce, and consume ${count} NativeSpanFeed drain records`,
+      "native-span-feed",
+      "opentui",
+      count === 1 || count === 256 ? "core" : "extended",
+      () => ({
+        run: () => {
+          const output = SpanInfoStruct.unpackList(buffer, count)
+          let checksum = 0
+          for (const span of output) checksum += span.len + span.chunkIndex
+          return checksum
+        },
+        validate: () => {
+          const output = SpanInfoStruct.unpackList(buffer, count)
+          assertEqual(output.length, count, "consumed span count")
+        },
+        workPerOperation: count,
+        workLabel: "spans",
+        bytesPerOperation: SpanInfoStruct.size * count,
+      }),
+    ),
   )
 }
 
@@ -1206,6 +1388,8 @@ for (const count of [24, 60, 1000, 10_000]) {
 
 const logicalCursorValue = { row: 120, col: 42, offset: 8192 }
 const visualCursorValue = { visualRow: 20, visualCol: 12, logicalRow: 120, logicalCol: 42, offset: 8192 }
+const logicalCursorBuffer = LogicalCursorStruct.pack(logicalCursorValue)
+const visualCursorBuffer = VisualCursorStruct.pack(visualCursorValue)
 scenarios.push(
   unpackScenario({
     name: "opentui/logical-cursor/unpack",
@@ -1214,7 +1398,7 @@ scenarios.push(
     source: "opentui",
     tier: "core",
     struct: LogicalCursorStruct,
-    buffer: LogicalCursorStruct.pack(logicalCursorValue),
+    buffer: logicalCursorBuffer,
     validate: (value) => assertEqual(value.offset, logicalCursorValue.offset, "logical cursor offset"),
   }),
   unpackScenario({
@@ -1224,8 +1408,58 @@ scenarios.push(
     source: "opentui",
     tier: "core",
     struct: VisualCursorStruct,
-    buffer: VisualCursorStruct.pack(visualCursorValue),
+    buffer: visualCursorBuffer,
     validate: (value) => assertEqual(value.logicalRow, visualCursorValue.logicalRow, "visual cursor logicalRow"),
+  }),
+  unpackConsumeScenario({
+    name: "opentui/logical-cursor/unpack-batch/200",
+    description: "Materialize and consume 200 logical cursor records",
+    category: "cursor",
+    source: "opentui",
+    tier: "core",
+    struct: LogicalCursorStruct,
+    buffer: logicalCursorBuffer,
+    iterations: 200,
+    consume: (value) => value.offset,
+    validate: (value) => assertEqual(value.offset, logicalCursorValue.offset, "logical cursor batch offset"),
+  }),
+  unpackConsumeScenario({
+    name: "opentui/visual-cursor/unpack-batch/200",
+    description: "Materialize and consume 200 visual cursor records",
+    category: "cursor",
+    source: "opentui",
+    tier: "core",
+    struct: VisualCursorStruct,
+    buffer: visualCursorBuffer,
+    iterations: 200,
+    consume: (value) => value.offset,
+    validate: (value) => assertEqual(value.logicalRow, visualCursorValue.logicalRow, "visual cursor batch row"),
+  }),
+  unpackIntoScenario({
+    name: "opentui/logical-cursor/unpack-into-batch/200",
+    description: "Reuse one output object and DataView for 200 logical cursor reads",
+    category: "cursor",
+    source: "opentui",
+    tier: "core",
+    struct: LogicalCursorStruct,
+    buffer: logicalCursorBuffer,
+    target: {},
+    iterations: 200,
+    consume: (value) => value.offset,
+    validate: (value) => assertEqual(value.offset, logicalCursorValue.offset, "logical cursor reuse offset"),
+  }),
+  unpackIntoScenario({
+    name: "opentui/visual-cursor/unpack-into-batch/200",
+    description: "Reuse one output object and DataView for 200 focused-editor visual cursor reads",
+    category: "cursor",
+    source: "opentui",
+    tier: "core",
+    struct: VisualCursorStruct,
+    buffer: visualCursorBuffer,
+    target: {},
+    iterations: 200,
+    consume: (value) => value.offset,
+    validate: (value) => assertEqual(value.logicalRow, visualCursorValue.logicalRow, "visual cursor reuse logicalRow"),
   }),
 )
 
@@ -1259,6 +1493,33 @@ scenarios.push(
       bytesPerOperation: MeasureResultStruct.size * 200,
       memoryIterations: 100,
     }),
+  ),
+  scenario(
+    "opentui/measure-result/unpack-into-batch/200",
+    "Reuse one DataView and output object for a 200-cell measurement burst",
+    "text-measure",
+    "opentui",
+    "core",
+    () => {
+      const view = new DataView(measureBuffer)
+      const target: Record<string, number> = {}
+      return {
+        run: () => {
+          let checksum = 0
+          for (let index = 0; index < 200; index += 1) {
+            checksum += MeasureResultStruct.unpackInto(view, target).widthColsMax
+          }
+          return checksum
+        },
+        validate: () => {
+          MeasureResultStruct.unpackInto(view, target)
+          assertEqual(target.lineCount, 6, "reused measure lineCount")
+        },
+        workPerOperation: 200,
+        workLabel: "measurements",
+        bytesPerOperation: MeasureResultStruct.size * 200,
+      }
+    },
   ),
 )
 
@@ -1342,6 +1603,20 @@ scenarios.push(
   }),
 )
 
+const gridOptionsValue = { drawInner: true, drawOuter: false }
+const imageDrawOptionsValue = {
+  x: 2,
+  y: 3,
+  width: 80,
+  height: 24,
+  pixelWidth: 640,
+  pixelHeight: 480,
+  sourceX: 0,
+  sourceY: 0,
+  sourceWidth: 640,
+  sourceHeight: 480,
+  protocol: 1,
+}
 scenarios.push(
   packScenario({
     name: "opentui/grid-options/pack",
@@ -1350,7 +1625,60 @@ scenarios.push(
     source: "opentui",
     tier: "extended",
     struct: GridDrawOptionsStruct,
-    value: { drawInner: true, drawOuter: false },
+    value: gridOptionsValue,
+  }),
+  packIntoScenario({
+    name: "opentui/grid-options/pack-into-batch/200",
+    description: "Two-byte grid draw options written 200 times into reusable storage",
+    category: "grid",
+    source: "opentui",
+    tier: "extended",
+    struct: GridDrawOptionsStruct,
+    value: gridOptionsValue,
+    iterations: 200,
+    consume: (view) => view.getUint8(0),
+  }),
+  packConsumeScenario({
+    name: "opentui/grid-options/pack-batch/200",
+    description: "Allocate, pack, and consume 200 grid draw option packets",
+    category: "grid",
+    source: "opentui",
+    tier: "extended",
+    struct: GridDrawOptionsStruct,
+    value: gridOptionsValue,
+    iterations: 200,
+    consume: (view) => view.getUint8(0),
+  }),
+  packScenario({
+    name: "opentui/image-draw-options/pack",
+    description: "Current fixed-layout image draw descriptor",
+    category: "image",
+    source: "opentui",
+    tier: "extended",
+    struct: ImageDrawOptionsStruct,
+    value: imageDrawOptionsValue,
+  }),
+  packIntoScenario({
+    name: "opentui/image-draw-options/pack-into-batch/200",
+    description: "Current image draw descriptor written 200 times into reusable storage",
+    category: "image",
+    source: "opentui",
+    tier: "extended",
+    struct: ImageDrawOptionsStruct,
+    value: imageDrawOptionsValue,
+    iterations: 200,
+    consume: (view) => view.getUint32(ImageDrawOptionsStruct.layoutByName.get("width")!.offset, true),
+  }),
+  packConsumeScenario({
+    name: "opentui/image-draw-options/pack-batch/200",
+    description: "Allocate, pack, and consume 200 current image draw descriptors",
+    category: "image",
+    source: "opentui",
+    tier: "extended",
+    struct: ImageDrawOptionsStruct,
+    value: imageDrawOptionsValue,
+    iterations: 200,
+    consume: (view) => view.getUint32(ImageDrawOptionsStruct.layoutByName.get("width")!.offset, true),
   }),
   packScenario({
     name: "opentui/native-span-options/pack/custom",
@@ -1704,6 +2032,56 @@ for (const count of [1, 16, 256, 4096, 16_384]) {
         assertEqual(output[count - 1]?.id, count - 1, "last flat list id")
       },
     }),
+    scenario(
+      `library/flat-list/manual-pack-into/${count}`,
+      `Pack ${count} flat structs through a manual packInto loop into reusable storage`,
+      "list",
+      "library",
+      tier,
+      () => {
+        const target = new ArrayBuffer(FlatStruct.size * count)
+        const view = new DataView(target)
+        return {
+          run: () => {
+            for (let index = 0; index < count; index += 1) {
+              FlatStruct.packInto(values[index]!, view, index * FlatStruct.size)
+            }
+            return target
+          },
+          validate: () => {
+            FlatStruct.packInto(values[0]!, view, 0)
+            assertEqual(new DataView(target).getUint32(0, true), 0, "manual packInto first id")
+          },
+          workPerOperation: count,
+          workLabel: "structs",
+          bytesPerOperation: FlatStruct.size * count,
+        }
+      },
+    ),
+    scenario(
+      `library/flat-list/pack-list-into/${count}`,
+      `Pack ${count} flat structs into reusable storage with packListInto`,
+      "list",
+      "library",
+      tier,
+      () => {
+        const target = new ArrayBuffer(FlatStruct.size * count)
+        const view = new DataView(target)
+        return {
+          run: () => {
+            FlatStruct.packListInto(values, view, 0)
+            return target
+          },
+          validate: () => {
+            FlatStruct.packListInto(values, view, 0)
+            assertEqual(new DataView(target).getUint32(0, true), 0, "packListInto first id")
+          },
+          workPerOperation: count,
+          workLabel: "structs",
+          bytesPerOperation: FlatStruct.size * count,
+        }
+      },
+    ),
   )
 }
 

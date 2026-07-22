@@ -15,6 +15,8 @@ TypeScript struct-packing library for Bun and Node.js `node:ffi` workflows. Defi
 - **Object pointers** for referencing external objects with `.ptr` property
 - **Allocation utilities** with pre-allocated sub-buffers for arrays
 - **C strings** (null-terminated) and raw string pointers
+- **Reusable decoding** into caller-owned objects and `DataView` storage
+- **Reusable primitive lists** with `packListInto`
 
 ## Installation
 
@@ -65,3 +67,36 @@ const unpacked = ObjectStruct.unpack(buffer)
 //   count?: number | null | undefined
 // }
 ```
+
+### Reusable Storage
+
+Definitions without a top-level `reduceValue` can decode into an existing object and `DataView`. The target is mutated and returned;
+properties unrelated to the struct are retained.
+
+```typescript
+const CursorStruct = defineStruct([
+  ["row", "u32"],
+  ["col", "u32"],
+])
+
+const packed = CursorStruct.pack({ row: 4, col: 8 })
+const cursor = {}
+CursorStruct.unpackInto(new DataView(packed), cursor)
+```
+
+Required primitive-only definitions can also pack lists into reusable storage:
+
+```typescript
+const buffer = new ArrayBuffer(CursorStruct.size * 2)
+CursorStruct.packListInto(
+  [
+    { row: 1, col: 2 },
+    { row: 3, col: 4 },
+  ],
+  new DataView(buffer),
+  0,
+)
+```
+
+`packListInto` deliberately rejects definitions with pointers, strings, arrays, defaults, transforms, validation, mapping, or nested
+structs. Those definitions require stronger dirty-buffer and pointer-owner replacement semantics than reusable primitive storage.

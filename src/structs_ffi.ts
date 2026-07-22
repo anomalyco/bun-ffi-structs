@@ -189,6 +189,12 @@ interface PlainPrimitiveField {
   type: Exclude<PrimitiveType, "pointer">
 }
 
+interface PrimitiveDecodeField {
+  name: string
+  offset: number
+  type: PrimitiveType
+}
+
 function hasPlainPrimitiveRuntimeOptions(options: StructFieldOptions): boolean {
   return (
     options.optional === true ||
@@ -377,7 +383,7 @@ function primitiveSetterSource(type: PlainPrimitiveField["type"], offset: number
   }
 }
 
-function primitiveGetterSource(type: PlainPrimitiveField["type"], offset: number): string {
+function primitiveGetterSource(type: PrimitiveType, offset: number): string {
   const target = `baseOffset + ${offset}`
   switch (type) {
     case "u8":
@@ -402,6 +408,11 @@ function primitiveGetterSource(type: PlainPrimitiveField["type"], offset: number
       return `view.getFloat32(${target}, true)`
     case "f64":
       return `view.getFloat64(${target}, true)`
+    case "pointer":
+      if (pointerSize === 8 && isBun) {
+        return `view.getUint32(${target}, true) + view.getUint32(${target} + 4, true) * 0x100000000`
+      }
+      return pointerSize === 8 ? `view.getBigUint64(${target}, true)` : `view.getUint32(${target}, true)`
   }
 }
 
@@ -460,6 +471,51 @@ function compilePlainPrimitivePack(fields: PlainPrimitiveField[], totalSize: num
   )(fatalError) as (obj: any) => ArrayBuffer
 }
 
+function compilePlainPrimitivePackInto(fields: PlainPrimitiveField[]) {
+  const writes = fields
+    .map((field, index) => {
+      const value = `value${index}`
+      return `
+        const ${value} = obj[${JSON.stringify(field.name)}] ?? undefined
+        if (${value} === undefined) {
+          console.warn(${JSON.stringify(`packInto missing value for non-optional field '${field.name}' at offset `)} + (baseOffset + ${field.offset}) + ${JSON.stringify(". Writing default or zero.")})
+        }
+        ${primitiveSetterSource(field.type, field.offset, value)}
+      `
+    })
+    .join("\n")
+
+  return new Function(
+    `return function packPlainPrimitiveInto(obj, view, baseOffset) {
+      ${writes}
+    }`,
+  )() as (obj: any, view: DataView, offset: number) => void
+}
+
+function compilePlainPrimitivePackListInto(fields: PlainPrimitiveField[], totalSize: number) {
+  const writes = fields
+    .map((field, index) => {
+      const value = `value${index}`
+      return `
+        const ${value} = obj[${JSON.stringify(field.name)}] ?? undefined
+        if (${value} === undefined) {
+          console.warn(${JSON.stringify(`packInto missing value for non-optional field '${field.name}' at offset `)} + (baseOffset + ${field.offset}) + ${JSON.stringify(". Writing default or zero.")})
+        }
+        ${primitiveSetterSource(field.type, field.offset, value)}
+      `
+    })
+    .join("\n")
+
+  return new Function(
+    `return function packPlainPrimitiveListInto(objects, view, initialOffset) {
+      for (let index = 0, baseOffset = initialOffset; index < objects.length; index++, baseOffset += ${totalSize}) {
+        const obj = objects[index]
+        ${writes}
+      }
+    }`,
+  )() as (objects: any[], view: DataView, offset: number) => void
+}
+
 function compilePlainPrimitiveUnpackList(fields: PlainPrimitiveField[], totalSize: number) {
   const reads = fields
     .map(
@@ -493,6 +549,45 @@ function compilePlainPrimitiveUnpackList(fields: PlainPrimitiveField[], totalSiz
   )() as (view: DataView, count: number) => any[]
 }
 
+function compileReducedPrimitiveUnpackList(
+  fields: PrimitiveDecodeField[],
+  totalSize: number,
+  options: StructDefOptions,
+) {
+  const reads = fields
+    .map(
+      (field, index) => `
+        let value${index}
+        try {
+          value${index} = ${primitiveGetterSource(field.type, field.offset)}
+        } catch (error) {
+          console.error(${JSON.stringify(`Error unpacking field '${field.name}' at index `)} + index + ${JSON.stringify(
+            ", offset ",
+          )} + (baseOffset + ${field.offset}) + ":", error)
+          throw error
+        }
+      `,
+    )
+    .join("\n")
+  const properties = fields.map((field, index) => `${JSON.stringify(field.name)}: value${index}`).join(",")
+
+  return new Function(
+    "options",
+    `return function unpackReducedPrimitiveList(view, count) {
+      const preallocated = Number.isSafeInteger(count) && count >= ${arrayPreallocationThreshold} && count <= ${maxArrayLength}
+      const results = preallocated ? new Array(count) : []
+      for (let index = 0, baseOffset = 0; index < count; index++, baseOffset += ${totalSize}) {
+        ${reads}
+        const raw = { ${properties} }
+        const value = options.reduceValue ? options.reduceValue(raw) : raw
+        if (preallocated) results[index] = value
+        else results.push(value)
+      }
+      return results
+    }`,
+  )(options) as (view: DataView, count: number) => any[]
+}
+
 function compilePlainPrimitiveUnpack(fields: PlainPrimitiveField[]) {
   const reads = fields
     .map(
@@ -518,6 +613,28 @@ function compilePlainPrimitiveUnpack(fields: PlainPrimitiveField[]) {
   )() as (view: DataView) => any
 }
 
+function compilePlainPrimitiveUnpackInto(fields: PlainPrimitiveField[]) {
+  const reads = fields
+    .map(
+      (field) => `
+        try {
+          target[${JSON.stringify(field.name)}] = ${primitiveGetterSource(field.type, field.offset)}
+        } catch (error) {
+          console.error(${JSON.stringify(`Error unpacking field '${field.name}' at offset ${field.offset}:`)}, error)
+          throw error
+        }
+      `,
+    )
+    .join("\n")
+
+  return new Function(
+    `return function unpackPlainPrimitiveInto(view, target, baseOffset) {
+      ${reads}
+      return target
+    }`,
+  )() as (view: DataView, target: any, baseOffset: number) => any
+}
+
 const { pack: pointerPacker, unpack: pointerUnpacker } = primitivePackers("pointer")
 const foreignMemoryPointerUnpacker =
   pointerSize === 8 && isBun
@@ -536,9 +653,7 @@ function retainPointerTarget(owner: ArrayBufferLike, target: unknown) {
 }
 
 function retainIfPointerTargets(owner: ArrayBufferLike, target: ArrayBufferLike) {
-  if (retainedPointerTargets.has(target)) {
-    retainPointerTarget(owner, target)
-  }
+  if (retainedPointerTargets.has(target)) retainPointerTarget(owner, target)
 }
 
 function isNullPointer(pointer: Pointer | null | undefined): boolean {
@@ -579,6 +694,8 @@ export function defineStruct<const Fields extends readonly StructField[], const 
   let directInlineUnpackSafe = !structDefOptions?.default && !structDefOptions?.reduceValue
   let plainPrimitiveFields: PlainPrimitiveField[] | null =
     structDefOptions?.mapValue || structDefOptions?.default || structDefOptions?.reduceValue ? null : []
+  let primitiveDecodeFields: PrimitiveDecodeField[] | null =
+    structDefOptions?.reduceValue && !structDefOptions.default ? [] : null
   const layout: StructLayoutField[] = []
   const lengthOfFields: Record<string, StructLayoutField> = {}
   const lengthOfRequested: {
@@ -883,6 +1000,13 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     if (plainPrimitiveFields && plainPrimitiveType) {
       plainPrimitiveFields.push({ name, offset, type: plainPrimitiveType })
     }
+    if (primitiveDecodeFields) {
+      if (isPrimitiveType(typeOrStruct) && !options.unpackTransform) {
+        primitiveDecodeFields.push({ name, offset, type: typeOrStruct })
+      } else {
+        primitiveDecodeFields = null
+      }
+    }
 
     if (options.unpackTransform) {
       directInlineUnpackSafe = false
@@ -1101,14 +1225,26 @@ export function defineStruct<const Fields extends readonly StructField[], const 
   const arrayFields = new Map(Object.entries(arrayFieldsMetadata))
   const iterableArrayFields = layout.filter((field) => Array.isArray(field.type))
   if (plainPrimitiveFields?.length !== layout.length || plainPrimitiveFields.length === 0) plainPrimitiveFields = null
+  const supportsPackListInto = !!plainPrimitiveFields
+  if (primitiveDecodeFields?.length !== layout.length || primitiveDecodeFields.length === 0) {
+    primitiveDecodeFields = null
+  }
   let plainPrimitivePackList: ((objects: any[]) => ArrayBuffer) | undefined
   let plainPrimitiveUnpackList: ((view: DataView, count: number) => any[]) | undefined
+  let reducedPrimitiveUnpackList: ((view: DataView, count: number) => any[]) | undefined
   let plainPrimitivePack: ((obj: any) => ArrayBuffer) | undefined
+  let plainPrimitivePackInto: ((obj: any, view: DataView, offset: number) => void) | undefined
+  let plainPrimitivePackListInto: ((objects: any[], view: DataView, offset: number) => void) | undefined
   let plainPrimitiveUnpack: ((view: DataView) => any) | undefined
+  let plainPrimitiveUnpackInto: ((view: DataView, target: any, offset: number) => any) | undefined
   let plainPrimitivePackListItems = 0
+  let plainPrimitivePackListIntoItems = 0
   let plainPrimitiveUnpackListItems = 0
+  let reducedPrimitiveUnpackListItems = 0
   let plainPrimitivePackCalls = 0
+  let plainPrimitivePackIntoCalls = 0
   let plainPrimitiveUnpackCalls = 0
+  let plainPrimitiveUnpackIntoCalls = 0
 
   const compilePlainPrimitive = <T>(compile: () => T): T | undefined => {
     try {
@@ -1116,8 +1252,49 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     } catch (error) {
       if (!(error instanceof EvalError)) throw error
       plainPrimitiveFields = null
+      primitiveDecodeFields = null
       return undefined
     }
+  }
+
+  const validateDecodeRange = (view: DataView, decodeOffset: number): void => {
+    if (!Number.isSafeInteger(decodeOffset) || decodeOffset < 0) {
+      throw new RangeError(`Decode offset must be a non-negative safe integer, got ${decodeOffset}`)
+    }
+    if (decodeOffset > view.byteLength - totalSize) {
+      throw new RangeError(
+        `DataView range (${view.byteLength} bytes) is too small for a struct at offset ${decodeOffset}`,
+      )
+    }
+  }
+
+  const decodeFieldsInto = (target: any, view: DataView, baseOffset: number): void => {
+    if (structDefOptions?.default) Object.assign(target, structDefOptions.default)
+
+    for (const field of layout) {
+      if (!field.unpack) continue
+
+      try {
+        target[field.name] = field.unpack(view, baseOffset + field.offset)
+      } catch (error) {
+        console.error(`Error unpacking field '${field.name}' at offset ${field.offset}:`, error)
+        throw error
+      }
+    }
+  }
+
+  const unpackInto = (view: DataView, target: any, decodeOffset = 0): any => {
+    validateDecodeRange(view, decodeOffset)
+    if (
+      plainPrimitiveFields &&
+      (plainPrimitiveUnpackInto || ++plainPrimitiveUnpackIntoCalls >= plainPrimitiveSpecializationThreshold)
+    ) {
+      plainPrimitiveUnpackInto ??= compilePlainPrimitive(() => compilePlainPrimitiveUnpackInto(plainPrimitiveFields!))
+      if (plainPrimitiveUnpackInto) return plainPrimitiveUnpackInto(view, target, decodeOffset)
+    }
+
+    decodeFieldsInto(target, view, decodeOffset)
+    return target
   }
 
   const materializeArrayIterables =
@@ -1193,6 +1370,17 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       offset: number,
       options?: StructFieldPackOptions,
     ): void {
+      if (
+        plainPrimitiveFields &&
+        (plainPrimitivePackInto || ++plainPrimitivePackIntoCalls >= plainPrimitiveSpecializationThreshold)
+      ) {
+        plainPrimitivePackInto ??= compilePlainPrimitive(() => compilePlainPrimitivePackInto(plainPrimitiveFields!))
+        if (plainPrimitivePackInto) {
+          plainPrimitivePackInto(obj, view, offset)
+          return
+        }
+      }
+
       let mappedObj: any = obj
       if (structDefOptions?.mapValue) {
         mappedObj = structDefOptions.mapValue(obj)
@@ -1313,6 +1501,36 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       return buffer
     },
 
+    packListInto(
+      objects: Simplify<StructObjectInputType<Fields>>[],
+      view: DataView,
+      offset: number,
+      options?: StructFieldPackOptions,
+    ): void {
+      if (objects.length === 0) return
+      if (!supportsPackListInto) throw new Error("packListInto only supports required primitive fields")
+
+      if (plainPrimitiveFields) {
+        plainPrimitivePackListIntoItems += objects.length
+        if (
+          plainPrimitivePackListInto ||
+          (objects.length > 1 && plainPrimitivePackListIntoItems >= plainPrimitiveSpecializationThreshold)
+        ) {
+          plainPrimitivePackListInto ??= compilePlainPrimitive(() =>
+            compilePlainPrimitivePackListInto(plainPrimitiveFields!, totalSize),
+          )
+          if (plainPrimitivePackListInto) {
+            plainPrimitivePackListInto(objects, view, offset)
+            return
+          }
+        }
+      }
+
+      for (let index = 0; index < objects.length; index += 1) {
+        ;(definition as any).packInto(objects[index]!, view, offset + index * totalSize, options)
+      }
+    },
+
     unpackList(buf: ArrayBuffer | SharedArrayBuffer, count: number): Simplify<StructObjectOutputType<Fields>>[] {
       if (count === 0) {
         return []
@@ -1333,6 +1551,15 @@ export function defineStruct<const Fields extends readonly StructField[], const 
             compilePlainPrimitiveUnpackList(plainPrimitiveFields!, totalSize),
           )
           if (plainPrimitiveUnpackList) return plainPrimitiveUnpackList(view, count)
+        }
+      }
+      if (!plainPrimitiveFields && primitiveDecodeFields && Number.isSafeInteger(count) && count > 1) {
+        reducedPrimitiveUnpackListItems += count
+        if (reducedPrimitiveUnpackList || reducedPrimitiveUnpackListItems >= plainPrimitiveSpecializationThreshold) {
+          reducedPrimitiveUnpackList ??= compilePlainPrimitive(() =>
+            compileReducedPrimitiveUnpackList(primitiveDecodeFields!, totalSize, structDefOptions!),
+          )
+          if (reducedPrimitiveUnpackList) return reducedPrimitiveUnpackList(view, count)
         }
       }
       const preallocated =
@@ -1372,7 +1599,9 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     describe() {
       return description
     },
-  } as DefineStructReturnType<Fields, Opts>
+  } as unknown as DefineStructReturnType<Fields, Opts>
+
+  if (!structDefOptions?.reduceValue) Object.assign(definition, { unpackInto })
 
   structInternals.set(definition, {
     layout,
