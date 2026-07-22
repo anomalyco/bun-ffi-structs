@@ -45,8 +45,10 @@ it("benchmark harness preserves measured operation errors", async () => {
 })
 
 it("benchmark scenario names are unique and every correctness preflight passes", () => {
-  expect(scenarios.length).toBeGreaterThan(60)
+  expect(scenarios).toHaveLength(151)
   expect(new Set(scenarios.map((scenario) => scenario.name)).size).toBe(scenarios.length)
+  expect(scenarios.filter((scenario) => scenario.source === "opentui")).toHaveLength(52)
+  expect(scenarios.filter((scenario) => scenario.source === "library")).toHaveLength(49)
   expect(scenarios.filter((scenario) => scenario.source === "legacy")).toHaveLength(45)
   expect(scenarios.filter((scenario) => scenario.source === "bun-webgpu")).toHaveLength(5)
 

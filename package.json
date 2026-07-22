@@ -1,5 +1,6 @@
 {
   "name": "bun-ffi-structs",
+  "description": "Type-safe C-style struct packing and unpacking for Bun and Node.js FFI",
   "version": "0.3.0",
   "module": "./dist/index.js",
   "main": "./dist/index.js",
@@ -17,8 +18,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/sst/bun-ffi-structs.git"
+    "url": "https://github.com/anomalyco/bun-ffi-structs.git"
   },
+  "homepage": "https://github.com/anomalyco/bun-ffi-structs#readme",
+  "bugs": "https://github.com/anomalyco/bun-ffi-structs/issues",
   "scripts": {
     "test": "bun test",
     "bench": "bun run bench/structs.bench.ts",

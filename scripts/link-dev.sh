@@ -2,8 +2,8 @@
 #
 # link-dev.sh - Development linking script for bun-ffi-structs
 #
-# This script creates a symbolic link (or copy) of the bun-ffi-structs package
-# into another project's node_modules directory for local development and testing.
+# This script creates a symbolic link (or copy) of bun-ffi-structs into another
+# project's node_modules directory for local development and testing.
 #
 # Usage:
 #   ./scripts/link-dev.sh <target-project-root> [options]
@@ -18,7 +18,7 @@
 #             Useful for scenarios where symlinks don't work (e.g., Docker volumes)
 #
 # Examples:
-#   # Link source for active development with hot-reload
+#   # Link the package root after running bun run build
 #   ./scripts/link-dev.sh /path/to/your/project
 #
 #   # Link built dist directory for testing production builds
@@ -29,7 +29,8 @@
 #
 # Notes:
 #   - Target project must have node_modules directory (run bun/npm install first)
-#   - Use --dist when you need to test the actual build output
+#   - The default package-root link resolves exports from dist/, so build first
+#   - Use --dist only when dist/ contains complete package metadata
 #   - Use --copy with --dist when symlinks aren't supported in your environment
 #
 

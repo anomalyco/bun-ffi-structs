@@ -21,7 +21,7 @@ CursorStruct.packListInto(cursors, view, 0)
 const cursor: Record<string, unknown> = {}
 for (let index = 0; index < cursors.length; index += 1) {
   CursorStruct.unpackInto(view, cursor, index * CursorStruct.size)
-  console.log(`Cursor ${index + 1}:`, { ...cursor })
+  console.log(`Cursor ${index + 1}: row=${cursor.row} col=${cursor.col} offset=${cursor.offset}`)
 }
 
 if (cursor.row !== 7 || cursor.col !== 8 || cursor.offset !== 9) {

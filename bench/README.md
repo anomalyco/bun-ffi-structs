@@ -56,7 +56,7 @@ Each scenario:
 4. Uses Tinybench's automatic warmup and minimum time/iteration stopping conditions.
 5. Reports Tinybench p50/p75/p99/p99.5/p99.9, sample variance, SD, SEM, Student-t critical value, MOE, RME, and throughput.
 6. Counts attempted operations and the first operation error before Tinybench stops the failed task.
-7. Retries high-RME results in a fresh Tinybench instance with a longer measured duration.
+7. In strict mode, retries high-RME results in a fresh Tinybench instance with a longer measured duration.
 
 Unpack scenarios use prebuilt buffers. They do not include packing in the timed operation. List and array cases report both
 call-level latency and normalized item throughput. Timed callbacks discard return values so Tinybench never receives its reserved
@@ -94,6 +94,8 @@ empirical distribution for styled chunk counts, viewport heights, document lengt
 The larger values in this suite are therefore labeled extended or stress scaling cases rather than claimed production averages.
 Styled-color scenarios mirror OpenTUI's normalization path for existing RGBA owners; they do not claim to measure string color
 parsing. Scenarios labeled as isolated unpack components exclude the surrounding native call and renderer work.
+Reusable-storage variants are prospective library comparisons of the same production-shaped layouts; they do not imply that the
+corresponding OpenTUI callsites already use `unpackInto` or `packListInto`.
 
 Generic library scenarios additionally cover allocation versus `packInto`, `packList` versus manual and compiled `packListInto`,
 schema compilation, primitive and enum arrays, iterable materialization, nested structs, transforms/validation, UTF-8 scaling,

@@ -6,7 +6,8 @@ import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 const repoRoot = resolve(import.meta.dir, "../..")
-const ffiLoadError = "bun-ffi-structs requires Bun or Node.js with node:ffi enabled (--experimental-ffi --allow-ffi)."
+const ffiLoadError =
+  "bun-ffi-structs pointer operations require Bun or Node.js 26.1+ with node:ffi enabled (--experimental-ffi)."
 const nodeFfiProbe = spawnSync(
   "node",
   ["--experimental-ffi", "--input-type=module", "-e", 'await import("node:ffi")'],

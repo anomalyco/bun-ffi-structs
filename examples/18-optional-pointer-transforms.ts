@@ -1,6 +1,6 @@
 import { defineStruct } from "../src/structs_ffi.js"
 
-console.log("=== Example 18: Optional Pointer with Type Transforms ===\n")
+console.log("=== Example 18: Optional Scalar Fields with Type Transforms ===\n")
 
 class Color {
   constructor(
@@ -129,4 +129,4 @@ console.log("Unpacked:", {
   bold: unpacked3.bold,
 })
 
-console.log("\n✓ Optional pointer fields with type transforms work!")
+console.log("\n✓ Optional scalar fields with type transforms work!")

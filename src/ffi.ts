@@ -15,7 +15,8 @@ interface NodeFfiModule {
   toArrayBuffer(pointer: bigint, length: number, copy?: boolean): ArrayBuffer
 }
 
-const FFI_LOAD_ERROR = "bun-ffi-structs requires Bun or Node.js with node:ffi enabled (--experimental-ffi --allow-ffi)."
+const FFI_LOAD_ERROR =
+  "bun-ffi-structs pointer operations require Bun or Node.js 26.1+ with node:ffi enabled (--experimental-ffi)."
 
 const backend = await loadBackend()
 

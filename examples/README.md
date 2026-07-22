@@ -10,7 +10,7 @@ Run any example with Bun:
 bun run examples/01-basic-primitives.ts
 ```
 
-Run all examples:
+Run all top-level examples:
 
 ```bash
 ./examples/run-all.sh
@@ -36,5 +36,5 @@ bun index.ts  # Run the TypeScript example
 ## Limitations
 
 - Unpacking arrays of structs is not yet implemented (see examples 09, 10)
-- Unpacking arrays of primitives is not yet implemented (see example 04)
-- Unpacking object pointers returns the raw pointer value, not the reconstructed object
+- Unpacking scalar object pointers returns the raw pointer value, not the reconstructed object
+- Unpacking arrays of object pointers is not yet implemented

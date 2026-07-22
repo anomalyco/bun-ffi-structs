@@ -85,14 +85,14 @@ const particleBuffer = ParticleStruct.packList(particles)
 
 console.log("✓ Packed", particles.length, "particles into", particleBuffer.byteLength, "bytes")
 console.log("  Struct size:", ParticleStruct.size, "bytes per particle")
-console.log("  Average packing time: ~", (particleBuffer.byteLength / particles.length).toFixed(2), "bytes/particle")
+console.log("  Packed size: ~", (particleBuffer.byteLength / particles.length).toFixed(2), "bytes/particle")
 
 console.log("\n=== unpackList: Reading Data Back ===\n")
 
 const unpackedChunks = StyledChunkStruct.unpackList(buffer, chunks.length)
 
 console.log("✓ Unpacked", unpackedChunks.length, "chunks from buffer")
-console.log("  Note: cstring fields unpack as pointers (use char* with reduceValue for actual strings)")
+console.log("  Note: cstring fields unpack as pointers (use char* with lengthOf for decoded strings)")
 console.log("  First chunk fg color:", unpackedChunks[0]!.fg)
 console.log("  Third chunk bg color:", unpackedChunks[2]!.bg)
 
@@ -111,9 +111,9 @@ console.log("  First particle position:", {
 })
 
 console.log("\n=== Performance Benefits ===\n")
-console.log("• Single buffer allocation instead of multiple allocations")
+console.log("• One contiguous struct buffer allocation; pointer payloads may allocate separately")
 console.log("• Simpler, more readable code")
 console.log("• Automatic validation for all items")
 console.log("• Consistent with pack() and packInto() API")
 console.log("• No manual offset calculations needed")
-console.log("• Full roundtrip support with packList/unpackList")
+console.log("• Roundtrip support for every field type that implements unpacking")
