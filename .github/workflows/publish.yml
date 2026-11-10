@@ -12,11 +12,24 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v7
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::604439173067:role/github/bun-ffi-structs-release
+          role-session-name: bun-ffi-structs-${{ github.run_id }}
+          aws-region: us-east-1
+      - name: Fetch the release secrets
+        uses: aws-actions/aws-secretsmanager-get-secrets@2297f9a879480a9e3af9b293ed15c70caf8e1c88 # v3.0.2
+        with:
+          secret-ids: |
+            NPM_TOKEN,bun-ffi-structs/release/NPM_TOKEN
+          parse-json-secrets: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
@@ -42,7 +55,7 @@ jobs:
       - name: Publish to NPM
         run: cd dist && bun publish --access public
         env:
-          NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_TOKEN: ${{ env.NPM_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
