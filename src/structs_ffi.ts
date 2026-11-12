@@ -178,6 +178,7 @@ interface StructLayoutField {
   validate?: ValidationFunction[]
   pack: (view: DataView, offset: number, value: any, obj: any, options?: StructFieldPackOptions) => void
   unpack: (view: DataView, offset: number) => any
+  packTransform?: (value: any) => any
   unpackTransform?: (value: any) => any
   type: PrimitiveType | EnumDef<any> | StructDef<any> | "cstring" | "char*" | ObjectPointerDef<any> | readonly [any]
   lengthOf?: string
@@ -697,6 +698,7 @@ export function defineStruct<const Fields extends readonly StructField[], const 
   let primitiveDecodeFields: PrimitiveDecodeField[] | null =
     structDefOptions?.reduceValue && !structDefOptions.default ? [] : null
   const layout: StructLayoutField[] = []
+  const layoutFieldsByName = new Map<string, StructLayoutField>()
   const lengthOfFields: Record<string, StructLayoutField> = {}
   const lengthOfRequested: {
     requester: StructLayoutField
@@ -1035,7 +1037,10 @@ export function defineStruct<const Fields extends readonly StructField[], const 
     if (options.lengthOf) {
       const originalPack = pack
       pack = (view, off, val, obj, packOptions) => {
-        const targetValue = obj[options.lengthOf!]
+        // Measure the value the target field packs, after its default and packTransform.
+        const targetField = layoutFieldsByName.get(options.lengthOf!)
+        let targetValue = obj[options.lengthOf!] ?? targetField?.default
+        if (targetField?.packTransform) targetValue = targetField.packTransform(targetValue)
         let length = 0
         if (targetValue) {
           if (typeof targetValue === "string") {
@@ -1065,11 +1070,13 @@ export function defineStruct<const Fields extends readonly StructField[], const 
       default: options.default,
       pack,
       unpack,
+      packTransform: options.packTransform,
       unpackTransform: options.unpackTransform,
       type: typeOrStruct,
       lengthOf: options.lengthOf,
     }
     layout.push(layoutField)
+    layoutFieldsByName.set(name, layoutField)
 
     if (options.lengthOf) {
       lengthOfFields[options.lengthOf] = layoutField

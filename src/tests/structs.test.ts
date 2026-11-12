@@ -460,6 +460,34 @@ describe("Structs FFI", () => {
       expect(unpacked.values).toBe(60)
     })
 
+    it("should derive lengthOf values from packTransform results", () => {
+      const TestStruct = defineStruct([
+        ["textLength", "u32", { lengthOf: "text" }],
+        ["text", "char*", { packTransform: (value: string) => `${value}!!` }],
+        ["valueCount", "u32", { lengthOf: "values" }],
+        ["values", ["u32"], { packTransform: (values: number[]) => values.filter((value) => value > 0) }],
+      ] as const)
+
+      const unpacked = TestStruct.unpack(TestStruct.pack({ text: "hi", values: [0, 10, 0, 20] }))
+
+      expect(unpacked.textLength).toBe(4)
+      expect(unpacked.text).toBe("hi!!")
+      expect(unpacked.valueCount).toBe(2)
+      expect(unpacked.values).toEqual([10, 20])
+    })
+
+    it("should derive lengthOf values from field defaults", () => {
+      const TestStruct = defineStruct([
+        ["valueCount", "u32", { lengthOf: "values" }],
+        ["values", ["u32"], { default: [1, 2, 3] }],
+      ] as const)
+
+      const unpacked = TestStruct.unpack(TestStruct.pack({}))
+
+      expect(unpacked.valueCount).toBe(3)
+      expect(unpacked.values).toEqual([1, 2, 3])
+    })
+
     it("should pack iterable array inputs", () => {
       const TestStruct = defineStruct([
         ["valueCount", "u32", { lengthOf: "values" }],
